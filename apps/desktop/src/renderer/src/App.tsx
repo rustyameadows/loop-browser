@@ -133,7 +133,11 @@ export const App = (): JSX.Element => {
           <div className="shell__error" role="alert">
             {navigationState.lastError}
           </div>
-        ) : null}
+        ) : (
+          <div className="shell__hint">
+            Tip: use View {'>'} Toggle Page DevTools if a site loads unexpectedly blank.
+          </div>
+        )}
       </section>
     </main>
   );

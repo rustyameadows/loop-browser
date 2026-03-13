@@ -165,6 +165,16 @@ input {
   border-radius: 16px;
   font-size: 12px;
   line-height: 1.35;
+  margin-top: -2px;
+}
+
+.shell__hint {
+  padding: 10px 12px;
+  border-radius: 16px;
+  font-size: 12px;
+  line-height: 1.35;
+  border: 1px solid rgba(124, 224, 200, 0.18);
+  background: rgba(124, 224, 200, 0.08);
 }
 
 .shell__error {

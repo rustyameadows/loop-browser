@@ -2,6 +2,7 @@ import path from 'node:path';
 import {
   BaseWindow,
   WebContentsView,
+  type WebContents,
   app,
   ipcMain,
   shell,
@@ -18,7 +19,7 @@ import {
 } from '@agent-browser/protocol';
 import { fixtureFileUrl, isSafeExternalUrl, normalizeAddress } from './url';
 
-const CHROME_HEIGHT = 148;
+const CHROME_HEIGHT = 176;
 
 export class BrowserShell {
   private window: BaseWindow | null = null;
@@ -80,6 +81,27 @@ export class BrowserShell {
     this.destroyWindow();
   }
 
+  reloadPage(ignoreCache = false): void {
+    if (!this.pageView) {
+      return;
+    }
+
+    if (ignoreCache) {
+      this.pageView.webContents.reloadIgnoringCache();
+      return;
+    }
+
+    this.pageView.webContents.reload();
+  }
+
+  togglePageDevTools(): void {
+    this.toggleDevToolsFor(this.pageView?.webContents);
+  }
+
+  toggleChromeDevTools(): void {
+    this.toggleDevToolsFor(this.uiView?.webContents);
+  }
+
   private registerIpcHandlers(): void {
     ipcMain.removeHandler(NAVIGATION_COMMAND_CHANNEL);
     ipcMain.removeHandler(NAVIGATION_GET_STATE_CHANNEL);
@@ -139,6 +161,10 @@ export class BrowserShell {
     });
 
     webContents.on('did-stop-loading', () => {
+      this.sendNavigationState();
+    });
+
+    webContents.on('did-finish-load', () => {
       this.sendNavigationState();
     });
 
@@ -314,5 +340,18 @@ export class BrowserShell {
     }
 
     view.webContents.close();
+  }
+
+  private toggleDevToolsFor(webContents: WebContents | undefined): void {
+    if (!webContents || webContents.isDestroyed()) {
+      return;
+    }
+
+    if (webContents.isDevToolsOpened()) {
+      webContents.closeDevTools();
+      return;
+    }
+
+    webContents.openDevTools({ mode: 'detach', activate: true });
   }
 }
