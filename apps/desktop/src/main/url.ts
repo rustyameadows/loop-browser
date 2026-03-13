@@ -31,11 +31,22 @@ export const normalizeAddress = (input: string): string => {
   return new URL(`https://${trimmed}`).toString();
 };
 
-export const fixtureFilePath = (appPath: string): string =>
-  path.join(appPath, 'static', 'local-fixture.html');
+export interface FixtureLocationOptions {
+  appPath: string;
+  isPackaged: boolean;
+  resourcesPath: string;
+}
 
-export const fixtureFileUrl = (appPath: string): string =>
-  pathToFileURL(fixtureFilePath(appPath)).toString();
+export const fixtureFilePath = ({
+  appPath,
+  isPackaged,
+  resourcesPath,
+}: FixtureLocationOptions): string =>
+  isPackaged
+    ? path.join(resourcesPath, 'static', 'local-fixture.html')
+    : path.join(appPath, 'static', 'local-fixture.html');
+
+export const fixtureFileUrl = (options: FixtureLocationOptions): string =>
+  pathToFileURL(fixtureFilePath(options)).toString();
 
 export const isSafeExternalUrl = (value: string): boolean => HTTP_SCHEME_PATTERN.test(value);
-

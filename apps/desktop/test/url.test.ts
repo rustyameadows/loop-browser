@@ -20,8 +20,28 @@ describe('normalizeAddress', () => {
 });
 
 describe('fixtureFileUrl', () => {
-  it('builds a file URL for the local fixture', () => {
-    const fixturePath = fixtureFilePath('/tmp/agent-browser');
-    expect(fixtureFileUrl('/tmp/agent-browser')).toBe(`file://${fixturePath}`);
+  it('builds a development file URL for the local fixture', () => {
+    const fixturePath = fixtureFilePath({
+      appPath: '/tmp/agent-browser',
+      isPackaged: false,
+      resourcesPath: '/tmp/agent-browser/resources',
+    });
+    expect(
+      fixtureFileUrl({
+        appPath: '/tmp/agent-browser',
+        isPackaged: false,
+        resourcesPath: '/tmp/agent-browser/resources',
+      }),
+    ).toBe(`file://${fixturePath}`);
+  });
+
+  it('resolves packaged fixtures from the resources directory', () => {
+    expect(
+      fixtureFilePath({
+        appPath: '/tmp/agent-browser/app.asar',
+        isPackaged: true,
+        resourcesPath: '/tmp/agent-browser/resources',
+      }),
+    ).toBe('/tmp/agent-browser/resources/static/local-fixture.html');
   });
 });

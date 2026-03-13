@@ -196,7 +196,13 @@ export class BrowserShell {
   }
 
   private async loadInitialPage(): Promise<void> {
-    await this.navigateTo(fixtureFileUrl(app.getAppPath()));
+    await this.navigateTo(
+      fixtureFileUrl({
+        appPath: app.getAppPath(),
+        isPackaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
+      }),
+    );
   }
 
   private layoutViews(): void {
@@ -310,4 +316,3 @@ export class BrowserShell {
     view.webContents.close();
   }
 }
-
