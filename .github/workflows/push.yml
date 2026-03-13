@@ -1,0 +1,59 @@
+name: push
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  macos-build:
+    runs-on: macos-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/electron
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm run test
+
+      - name: Build unpackaged app
+        run: npm run build
+
+      - name: Package macOS artifact
+        run: npm run package:mac
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-browser-macos-${{ github.sha }}
+          path: |
+            apps/desktop/out/make/zip/darwin/**/*.zip
+            apps/desktop/out/package/**
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,29 @@
+{
+  "name": "agent-browser",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "npm run dev --workspace @agent-browser/desktop",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p packages/protocol/tsconfig.json && tsc --noEmit -p apps/desktop/tsconfig.json",
+    "test": "vitest run",
+    "build": "npm run build --workspace @agent-browser/desktop",
+    "package:mac": "npm run make:mac --workspace @agent-browser/desktop"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.5.0",
+    "eslint": "^10.0.3",
+    "globals": "^17.4.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.57.0",
+    "vitest": "^4.1.0"
+  }
+}

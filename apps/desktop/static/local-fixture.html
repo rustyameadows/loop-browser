@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent Browser Fixture</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "IBM Plex Sans", "Avenir Next", sans-serif;
+        color: #ecf4ff;
+        background:
+          radial-gradient(circle at top left, rgba(90, 173, 255, 0.32), transparent 32%),
+          linear-gradient(160deg, #10243d, #050b16 72%);
+      }
+
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 72px 28px;
+      }
+
+      h1 {
+        margin-bottom: 12px;
+        font-size: clamp(2rem, 4vw, 3.2rem);
+      }
+
+      p {
+        color: #bfd2ef;
+        line-height: 1.6;
+      }
+
+      .cards {
+        display: grid;
+        gap: 16px;
+        margin-top: 28px;
+      }
+
+      .card {
+        padding: 18px 20px;
+        border: 1px solid rgba(191, 210, 239, 0.16);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      a {
+        color: #8ee5cf;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Local Fixture Loaded</h1>
+      <p>
+        This page ships with the repo so the first launch exercises a <code>file://</code> navigation before
+        you wire in tabs, agents, or Playwright.
+      </p>
+
+      <div class="cards">
+        <section class="card">
+          <strong>Remote navigation</strong>
+          <p>Try entering <code>example.com</code> or an explicit <code>http://localhost:3000</code> URL.</p>
+        </section>
+        <section class="card">
+          <strong>Popup policy</strong>
+          <p>
+            <a href="https://example.com" target="_blank" rel="noreferrer">Open a remote popup test</a>
+            to verify that in-app popups are denied and plain web URLs open externally.
+          </p>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>
+

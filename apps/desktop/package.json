@@ -1,0 +1,30 @@
+{
+  "name": "@agent-browser/desktop",
+  "productName": "Agent Browser",
+  "version": "0.1.0",
+  "private": true,
+  "main": ".vite/build/index.js",
+  "description": "Electron browser shell bootstrap for Agent Browser",
+  "scripts": {
+    "dev": "electron-forge start",
+    "build": "electron-forge package",
+    "make": "electron-forge make",
+    "make:mac": "electron-forge make --platform=darwin"
+  },
+  "dependencies": {
+    "@agent-browser/protocol": "0.1.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.11.1",
+    "@electron-forge/maker-zip": "^7.11.1",
+    "@electron-forge/plugin-fuses": "^7.11.1",
+    "@electron-forge/plugin-vite": "^7.11.1",
+    "@electron/fuses": "^1.8.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "electron": "^41.0.2"
+  }
+}

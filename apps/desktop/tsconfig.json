@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "types": [
+      "node",
+      "vite/client",
+      "@electron-forge/plugin-vite/forge-vite-env"
+    ]
+  },
+  "include": [
+    "forge.config.ts",
+    "forge.env.d.ts",
+    "vite.*.config.ts",
+    "../../packages/protocol/src/**/*.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "test/**/*.ts"
+  ]
+}
