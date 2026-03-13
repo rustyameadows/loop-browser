@@ -110,16 +110,22 @@ export const App = (): JSX.Element => {
           </button>
         </form>
 
-        <div className="shell__meta">
-          <div>
-            <div className="shell__metaLabel">Page Title</div>
-            <div className="shell__metaValue">{navigationState.title}</div>
+        <div className="shell__statusRow">
+          <div className="shell__statusBlock">
+            <span className="shell__statusLabel">Title</span>
+            <span className="shell__statusValue">{navigationState.title}</span>
           </div>
-          <div>
-            <div className="shell__metaLabel">State</div>
-            <div className="shell__metaValue">
+          <div className="shell__statusBlock">
+            <span className="shell__statusLabel">State</span>
+            <span className="shell__statusValue">
               {navigationState.isLoading ? 'Loading' : 'Idle'}
-            </div>
+            </span>
+          </div>
+          <div className="shell__statusBlock shell__statusBlock--grow">
+            <span className="shell__statusLabel">Policy</span>
+            <span className="shell__statusValue">
+              Popup windows stay out-of-app; web links open externally.
+            </span>
           </div>
         </div>
 
@@ -127,12 +133,7 @@ export const App = (): JSX.Element => {
           <div className="shell__error" role="alert">
             {navigationState.lastError}
           </div>
-        ) : (
-          <div className="shell__hint">
-            The app opens a local fixture on first launch. Popups from remote pages are denied in-app and
-            plain http/https popups open in the default browser.
-          </div>
-        )}
+        ) : null}
       </section>
     </main>
   );

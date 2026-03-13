@@ -18,7 +18,7 @@ import {
 } from '@agent-browser/protocol';
 import { fixtureFileUrl, isSafeExternalUrl, normalizeAddress } from './url';
 
-const CHROME_HEIGHT = 104;
+const CHROME_HEIGHT = 148;
 
 export class BrowserShell {
   private window: BaseWindow | null = null;
