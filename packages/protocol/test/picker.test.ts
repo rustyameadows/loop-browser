@@ -13,6 +13,9 @@ const sampleDescriptor = {
   tag: 'button',
   id: 'cta',
   classList: ['primary'],
+  role: 'button',
+  accessibleName: 'Launch',
+  playwrightLocator: "getByRole('button', { name: 'Launch' })",
   textSnippet: 'Launch',
   bbox: {
     x: 10,

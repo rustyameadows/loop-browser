@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState, type FormEvent, type JSX, type SVGProps } from 'react';
 import {
+  createEmptyFeedbackState,
   createEmptyMcpViewState,
   createEmptyMarkdownViewState,
   createEmptyNavigationState,
   createEmptyPickerState,
   type ElementDescriptor,
+  type FeedbackAnnotation,
+  type FeedbackCommand,
+  type FeedbackKind,
+  type FeedbackPriority,
+  type FeedbackState,
   type McpViewCommand,
   type McpViewState,
   type MarkdownViewCommand,
@@ -17,11 +23,12 @@ import {
 
 const emptyState = createEmptyNavigationState();
 const emptyPickerState = createEmptyPickerState();
+const emptyFeedbackState = createEmptyFeedbackState();
 const emptyMarkdownState = createEmptyMarkdownViewState();
 const emptyMcpState = createEmptyMcpViewState();
 const stubTabs = ['Agent Chat', 'Inspector'];
 
-type SurfaceMode = 'chrome' | 'markdown' | 'mcp';
+type SurfaceMode = 'chrome' | 'markdown' | 'mcp' | 'feedback';
 
 type IconName =
   | 'arrowUpRight'
@@ -46,6 +53,10 @@ const getSurfaceMode = (): SurfaceMode => {
 
   if (params.get('surface') === 'mcp') {
     return 'mcp';
+  }
+
+  if (params.get('surface') === 'feedback') {
+    return 'feedback';
   }
 
   return 'chrome';
@@ -86,6 +97,11 @@ const getQuietStatus = (state: NavigationState): string => {
 const getLocationIcon = (url: string): IconName => (url.startsWith('file:') ? 'file' : 'globe');
 
 const getSelectionHeading = (selection: ElementDescriptor): string => {
+  const name = selection.accessibleName || selection.textSnippet;
+  if (name) {
+    return `${selection.role || selection.tag} "${name}"`;
+  }
+
   const parts = [selection.tag];
   if (selection.id) {
     parts.push(`#${selection.id}`);
@@ -99,12 +115,74 @@ const getSelectionHeading = (selection: ElementDescriptor): string => {
 };
 
 const getSelectionMeta = (selection: ElementDescriptor): string => {
-  const summaryParts = [selection.selector];
-  if (selection.textSnippet) {
+  const summaryParts = [selection.playwrightLocator || selection.selector];
+  if (selection.textSnippet && selection.textSnippet !== selection.accessibleName) {
     summaryParts.push(selection.textSnippet);
   }
 
   return summaryParts.join(' | ');
+};
+
+const getFeedbackStatusLabel = (status: FeedbackAnnotation['status']): string => {
+  switch (status) {
+    case 'acknowledged':
+      return 'Acknowledged';
+    case 'in_progress':
+      return 'In Progress';
+    case 'resolved':
+      return 'Resolved';
+    case 'dismissed':
+      return 'Dismissed';
+    case 'open':
+    default:
+      return 'Open';
+  }
+};
+
+const getFeedbackStatusTone = (
+  status: FeedbackAnnotation['status'],
+): 'neutral' | 'blue' | 'green' | 'red' | 'gold' => {
+  switch (status) {
+    case 'acknowledged':
+      return 'blue';
+    case 'in_progress':
+      return 'gold';
+    case 'resolved':
+      return 'green';
+    case 'dismissed':
+      return 'red';
+    case 'open':
+    default:
+      return 'neutral';
+  }
+};
+
+const getFeedbackKindLabel = (kind: FeedbackKind): string => {
+  switch (kind) {
+    case 'change':
+      return 'Change';
+    case 'question':
+      return 'Question';
+    case 'praise':
+      return 'Praise';
+    case 'bug':
+    default:
+      return 'Bug';
+  }
+};
+
+const getFeedbackPriorityLabel = (priority: FeedbackPriority): string => {
+  switch (priority) {
+    case 'critical':
+      return 'Critical';
+    case 'high':
+      return 'High';
+    case 'low':
+      return 'Low';
+    case 'medium':
+    default:
+      return 'Medium';
+  }
 };
 
 const getMarkdownSourceLabel = (state: MarkdownViewState): string => {
@@ -423,6 +501,40 @@ const usePickerState = (): PickerState => {
   return pickerState;
 };
 
+const useFeedbackState = (): FeedbackState => {
+  const [feedbackState, setFeedbackState] = useState<FeedbackState>(emptyFeedbackState);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const syncInitialFeedbackState = async (): Promise<void> => {
+      const initialState = await window.agentBrowser.getFeedbackState();
+      if (!isMounted) {
+        return;
+      }
+
+      setFeedbackState(initialState);
+    };
+
+    void syncInitialFeedbackState();
+
+    const unsubscribe = window.agentBrowser.subscribeFeedback((nextState) => {
+      if (!isMounted) {
+        return;
+      }
+
+      setFeedbackState(nextState);
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, []);
+
+  return feedbackState;
+};
+
 const useMarkdownViewState = (): MarkdownViewState => {
   const [markdownViewState, setMarkdownViewState] = useState<MarkdownViewState>(emptyMarkdownState);
 
@@ -494,6 +606,7 @@ const useMcpViewState = (): McpViewState => {
 const ChromeSurface = (): JSX.Element => {
   const navigationState = useNavigationState();
   const pickerState = usePickerState();
+  const feedbackState = useFeedbackState();
   const markdownViewState = useMarkdownViewState();
   const mcpViewState = useMcpViewState();
   const [draftUrl, setDraftUrl] = useState('');
@@ -536,6 +649,10 @@ const ChromeSurface = (): JSX.Element => {
     await window.agentBrowser.executeMcpView(command);
   };
 
+  const runFeedbackCommand = async (command: FeedbackCommand): Promise<void> => {
+    await window.agentBrowser.executeFeedback(command);
+  };
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
     await runCommand({ action: 'navigate', target: draftUrl });
@@ -563,15 +680,26 @@ const ChromeSurface = (): JSX.Element => {
   const diagnosticLabel = navigationState.lastError ?? getQuietStatus(navigationState);
   const locationIcon = getLocationIcon(navigationState.url);
   const selection = pickerState.lastSelection;
+  const draftSelection = feedbackState.draft.selection;
+  const activeAnnotation =
+    feedbackState.annotations.find((annotation) => annotation.id === feedbackState.activeAnnotationId) ??
+    null;
+  const openAnnotationCount = feedbackState.annotations.filter(
+    (annotation) => annotation.status === 'open' || annotation.status === 'acknowledged' || annotation.status === 'in_progress',
+  ).length;
   const inspectorHeading = pickerState.enabled
     ? 'Pick mode is active'
-    : selection
-      ? getSelectionHeading(selection)
+    : draftSelection
+      ? `Draft ready for ${getSelectionHeading(draftSelection)}`
+      : selection
+        ? getSelectionHeading(selection)
       : 'DOM picker ready';
   const inspectorMeta = pickerState.enabled
     ? 'Click any element in the page, or press Esc to cancel.'
-    : selection
-      ? getSelectionMeta(selection)
+    : draftSelection
+      ? 'Add context, classify the issue, and let the agent respond in the feedback panel.'
+      : selection
+        ? getSelectionMeta(selection)
       : 'Use the crosshair button or View > Toggle Pick Mode.';
 
   return (
@@ -688,6 +816,26 @@ const ChromeSurface = (): JSX.Element => {
               <ChromeIcon className="shell__icon" name="crosshair" />
             </button>
             <button
+              aria-label={
+                feedbackState.isOpen
+                  ? 'Close feedback loop'
+                  : `Open feedback loop${openAnnotationCount ? ` (${openAnnotationCount} open)` : ''}`
+              }
+              aria-pressed={feedbackState.isOpen}
+              className={`shell__pillButton shell__pillButton--feedback${
+                feedbackState.isOpen ? ' shell__pillButton--feedbackActive' : ''
+              }`}
+              onClick={() =>
+                void runFeedbackCommand({
+                  action: feedbackState.isOpen ? 'close' : 'open',
+                })
+              }
+              type="button"
+            >
+              <span className="shell__feedbackCount">{openAnnotationCount}</span>
+              <span>Feedback Loop</span>
+            </button>
+            <button
               aria-label={markdownViewState.isOpen ? 'Close Markdown view' : 'View page as Markdown'}
               aria-pressed={markdownViewState.isOpen}
               className={`shell__pillButton shell__pillButton--md${
@@ -741,7 +889,7 @@ const ChromeSurface = (): JSX.Element => {
         <div
           className={`shell__selectionBar${
             pickerState.enabled ? ' shell__selectionBar--armed' : ''
-          }${selection ? ' shell__selectionBar--filled' : ''}`}
+          }${selection || draftSelection ? ' shell__selectionBar--filled' : ''}`}
         >
           <div className="shell__selectionCopy">
             <div className="shell__selectionTitle">{inspectorHeading}</div>
@@ -749,6 +897,24 @@ const ChromeSurface = (): JSX.Element => {
           </div>
 
           <div className="shell__selectionActions">
+            {draftSelection ? (
+              <button
+                className="shell__pillButton"
+                onClick={() => void runFeedbackCommand({ action: 'open' })}
+                type="button"
+              >
+                Open Draft
+              </button>
+            ) : null}
+            {activeAnnotation ? (
+              <span
+                className={`shell__feedbackStatus shell__feedbackStatus--${getFeedbackStatusTone(
+                  activeAnnotation.status,
+                )}`}
+              >
+                {getFeedbackStatusLabel(activeAnnotation.status)}
+              </span>
+            ) : null}
             {selection ? (
               <button className="shell__pillButton" onClick={handleCopyDescriptor} type="button">
                 {copyFeedback}
@@ -1035,8 +1201,382 @@ const McpSurface = (): JSX.Element => {
   );
 };
 
+const FeedbackSurface = (): JSX.Element => {
+  const feedbackState = useFeedbackState();
+  const navigationState = useNavigationState();
+  const [summaryDraft, setSummaryDraft] = useState('');
+  const [noteDraft, setNoteDraft] = useState('');
+  const [replyDraft, setReplyDraft] = useState('');
+
+  const currentPageAnnotations = feedbackState.annotations.filter(
+    (annotation) => annotation.url === navigationState.url,
+  );
+  const activeAnnotation =
+    feedbackState.annotations.find((annotation) => annotation.id === feedbackState.activeAnnotationId) ??
+    currentPageAnnotations[0] ??
+    feedbackState.annotations[0] ??
+    null;
+  const openAnnotationCount = feedbackState.annotations.filter(
+    (annotation) =>
+      annotation.status === 'open' ||
+      annotation.status === 'acknowledged' ||
+      annotation.status === 'in_progress',
+  ).length;
+
+  useEffect(() => {
+    setSummaryDraft(feedbackState.draft.summary);
+    setNoteDraft(feedbackState.draft.note);
+  }, [feedbackState.draft.summary, feedbackState.draft.note, feedbackState.draft.selection]);
+
+  useEffect(() => {
+    setReplyDraft('');
+  }, [feedbackState.activeAnnotationId]);
+
+  const runFeedbackCommand = async (command: FeedbackCommand): Promise<void> => {
+    await window.agentBrowser.executeFeedback(command);
+  };
+
+  const handleDraftSubmit = async (): Promise<void> => {
+    await runFeedbackCommand({
+      action: 'updateDraft',
+      summary: summaryDraft,
+      note: noteDraft,
+    });
+    await runFeedbackCommand({ action: 'submitDraft' });
+  };
+
+  const handleReplySubmit = async (): Promise<void> => {
+    if (!activeAnnotation || !replyDraft.trim()) {
+      return;
+    }
+
+    await runFeedbackCommand({
+      action: 'reply',
+      annotationId: activeAnnotation.id,
+      body: replyDraft,
+      author: 'human',
+    });
+    setReplyDraft('');
+  };
+
+  const handleCopyAnnotation = (): void => {
+    if (!activeAnnotation) {
+      return;
+    }
+
+    window.agentBrowser.copyText(JSON.stringify(activeAnnotation, null, 2));
+  };
+
+  return (
+    <main className="feedbackSurface">
+      <section className="feedbackSurface__panel">
+        <header className="feedbackSurface__header">
+          <div className="feedbackSurface__eyebrow">Selector Feedback Loop</div>
+          <button
+            aria-label="Close feedback view"
+            className="feedbackSurface__iconButton"
+            onClick={() => void runFeedbackCommand({ action: 'close' })}
+            type="button"
+          >
+            <ChromeIcon className="shell__icon" name="close" />
+          </button>
+        </header>
+
+        <section className="feedbackSurface__hero">
+          <div>
+            <div className="feedbackSurface__title">Human notes, agent replies, one loop.</div>
+            <div className="feedbackSurface__subtitle">
+              Pick an element, describe the issue, and let the agent acknowledge or resolve it
+              from the same thread.
+            </div>
+          </div>
+          <div className="feedbackSurface__heroMeta">
+            <span className="feedbackSurface__heroCount">{openAnnotationCount}</span>
+            <span>open items</span>
+          </div>
+        </section>
+
+        <div className="feedbackSurface__body">
+          <section className="feedbackSurface__section">
+            <div className="feedbackSurface__sectionHeader">
+              <div className="feedbackSurface__sectionTitle">Current draft</div>
+              <div className="feedbackSurface__sectionMeta">
+                {feedbackState.draft.selection ? 'Live from picker' : 'Waiting for selection'}
+              </div>
+            </div>
+
+            {feedbackState.draft.selection ? (
+              <>
+                <div className="feedbackSurface__selectionCard">
+                  <div className="feedbackSurface__selectionTitle">
+                    {getSelectionHeading(feedbackState.draft.selection)}
+                  </div>
+                  <div className="feedbackSurface__selectionMeta">
+                    {getSelectionMeta(feedbackState.draft.selection)}
+                  </div>
+                </div>
+
+                <label className="feedbackSurface__field">
+                  <span className="feedbackSurface__fieldLabel">Summary</span>
+                  <input
+                    className="feedbackSurface__input"
+                    onChange={(event) => {
+                      setSummaryDraft(event.target.value);
+                      void runFeedbackCommand({
+                        action: 'updateDraft',
+                        summary: event.target.value,
+                      });
+                    }}
+                    placeholder="What should the agent notice here?"
+                    type="text"
+                    value={summaryDraft}
+                  />
+                </label>
+
+                <div className="feedbackSurface__fieldRow">
+                  <label className="feedbackSurface__field">
+                    <span className="feedbackSurface__fieldLabel">Kind</span>
+                    <select
+                      className="feedbackSurface__select"
+                      onChange={(event) =>
+                        void runFeedbackCommand({
+                          action: 'updateDraft',
+                          kind: event.target.value as FeedbackKind,
+                        })
+                      }
+                      value={feedbackState.draft.kind}
+                    >
+                      <option value="bug">Bug</option>
+                      <option value="change">Change</option>
+                      <option value="question">Question</option>
+                      <option value="praise">Praise</option>
+                    </select>
+                  </label>
+
+                  <label className="feedbackSurface__field">
+                    <span className="feedbackSurface__fieldLabel">Priority</span>
+                    <select
+                      className="feedbackSurface__select"
+                      onChange={(event) =>
+                        void runFeedbackCommand({
+                          action: 'updateDraft',
+                          priority: event.target.value as FeedbackPriority,
+                        })
+                      }
+                      value={feedbackState.draft.priority}
+                    >
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                      <option value="critical">Critical</option>
+                    </select>
+                  </label>
+                </div>
+
+                <label className="feedbackSurface__field">
+                  <span className="feedbackSurface__fieldLabel">Context for the agent</span>
+                  <textarea
+                    className="feedbackSurface__textarea"
+                    onChange={(event) => {
+                      setNoteDraft(event.target.value);
+                      void runFeedbackCommand({
+                        action: 'updateDraft',
+                        note: event.target.value,
+                      });
+                    }}
+                    placeholder="Describe the problem, intent, or expected behavior."
+                    rows={4}
+                    value={noteDraft}
+                  />
+                </label>
+
+                <div className="feedbackSurface__actions">
+                  <button className="shell__pillButton" onClick={() => void handleDraftSubmit()} type="button">
+                    Save Annotation
+                  </button>
+                  <button
+                    className="shell__pillButton shell__pillButton--muted"
+                    onClick={() => void runFeedbackCommand({ action: 'clearDraft' })}
+                    type="button"
+                  >
+                    Clear Draft
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="feedbackSurface__empty">
+                Arm pick mode from the top bar, click any element, and this composer will preload
+                the selector context for you.
+              </div>
+            )}
+          </section>
+
+          <section className="feedbackSurface__section">
+            <div className="feedbackSurface__sectionHeader">
+              <div className="feedbackSurface__sectionTitle">Annotations</div>
+              <div className="feedbackSurface__sectionMeta">
+                {currentPageAnnotations.length} on this page
+              </div>
+            </div>
+
+            <div className="feedbackSurface__annotationList">
+              {currentPageAnnotations.length > 0 ? (
+                currentPageAnnotations.map((annotation) => (
+                  <button
+                    className={`feedbackSurface__annotationCard${
+                      activeAnnotation?.id === annotation.id
+                        ? ' feedbackSurface__annotationCard--active'
+                        : ''
+                    }`}
+                    key={annotation.id}
+                    onClick={() =>
+                      void runFeedbackCommand({
+                        action: 'selectAnnotation',
+                        annotationId: annotation.id,
+                      })
+                    }
+                    type="button"
+                  >
+                    <div className="feedbackSurface__annotationHeader">
+                      <span className="feedbackSurface__annotationTitle">{annotation.summary}</span>
+                      <span
+                        className={`shell__feedbackStatus shell__feedbackStatus--${getFeedbackStatusTone(
+                          annotation.status,
+                        )}`}
+                      >
+                        {getFeedbackStatusLabel(annotation.status)}
+                      </span>
+                    </div>
+                    <div className="feedbackSurface__annotationMeta">
+                      {getFeedbackKindLabel(annotation.kind)} • {getFeedbackPriorityLabel(annotation.priority)} •{' '}
+                      {formatTimestamp(annotation.updatedAt)}
+                    </div>
+                    <div className="feedbackSurface__annotationMeta">
+                      {getSelectionHeading(annotation.selection)}
+                    </div>
+                  </button>
+                ))
+              ) : (
+                <div className="feedbackSurface__empty">
+                  No saved annotations for this page yet.
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="feedbackSurface__section">
+            <div className="feedbackSurface__sectionHeader">
+              <div className="feedbackSurface__sectionTitle">Thread</div>
+              <div className="feedbackSurface__sectionMeta">
+                {activeAnnotation ? 'Shared with the agent' : 'Select an annotation'}
+              </div>
+            </div>
+
+            {activeAnnotation ? (
+              <>
+                <div className="feedbackSurface__threadHero">
+                  <div className="feedbackSurface__threadTitle">{activeAnnotation.summary}</div>
+                  <div className="feedbackSurface__threadMeta">
+                    {activeAnnotation.pageTitle} • {formatTimestamp(activeAnnotation.createdAt)}
+                  </div>
+                  <div className="feedbackSurface__statusRow">
+                    {(['open', 'acknowledged', 'in_progress', 'resolved', 'dismissed'] as const).map(
+                      (status) => (
+                        <button
+                          className={`shell__pillButton${
+                            activeAnnotation.status === status
+                              ? ` shell__pillButton--statusActive shell__pillButton--status-${getFeedbackStatusTone(status)}`
+                              : ' shell__pillButton--muted'
+                          }`}
+                          key={status}
+                          onClick={() =>
+                            void runFeedbackCommand({
+                              action: 'setStatus',
+                              annotationId: activeAnnotation.id,
+                              status,
+                            })
+                          }
+                          type="button"
+                        >
+                          {getFeedbackStatusLabel(status)}
+                        </button>
+                      ),
+                    )}
+                  </div>
+                </div>
+
+                <div className="feedbackSurface__threadList">
+                  {activeAnnotation.note ? (
+                    <article className="feedbackSurface__threadItem">
+                      <div className="feedbackSurface__threadAuthor">Human note</div>
+                      <div className="feedbackSurface__threadBody">{activeAnnotation.note}</div>
+                    </article>
+                  ) : null}
+                  {activeAnnotation.replies.map((reply) => (
+                    <article className="feedbackSurface__threadItem" key={reply.id}>
+                      <div className="feedbackSurface__threadAuthor">
+                        {reply.author === 'agent'
+                          ? 'Agent reply'
+                          : reply.author === 'system'
+                            ? 'System event'
+                            : 'Human reply'}
+                      </div>
+                      <div className="feedbackSurface__threadBody">{reply.body}</div>
+                      <div className="feedbackSurface__annotationMeta">
+                        {formatTimestamp(reply.createdAt)}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+
+                <label className="feedbackSurface__field">
+                  <span className="feedbackSurface__fieldLabel">Add reply</span>
+                  <textarea
+                    className="feedbackSurface__textarea"
+                    onChange={(event) => setReplyDraft(event.target.value)}
+                    placeholder="What should the agent know next?"
+                    rows={3}
+                    value={replyDraft}
+                  />
+                </label>
+
+                <div className="feedbackSurface__actions">
+                  <button
+                    className="shell__pillButton"
+                    disabled={!replyDraft.trim()}
+                    onClick={() => void handleReplySubmit()}
+                    type="button"
+                  >
+                    Post Reply
+                  </button>
+                  <button
+                    className="shell__pillButton shell__pillButton--muted"
+                    onClick={handleCopyAnnotation}
+                    type="button"
+                  >
+                    Copy JSON
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="feedbackSurface__empty">
+                Saved annotations will show their conversation thread here so the human and agent
+                stay in sync.
+              </div>
+            )}
+          </section>
+        </div>
+      </section>
+    </main>
+  );
+};
+
 export const App = (): JSX.Element => {
   const surfaceMode = getSurfaceMode();
+
+  if (surfaceMode === 'feedback') {
+    return <FeedbackSurface />;
+  }
 
   if (surfaceMode === 'markdown') {
     return <MarkdownSurface />;

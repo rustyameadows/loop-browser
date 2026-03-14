@@ -5,14 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Browser Fixture</title>
     <style>
+      :root {
+        color-scheme: light;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
       body {
         margin: 0;
         min-height: 100vh;
         font-family: "IBM Plex Sans", "Avenir Next", sans-serif;
-        color: #ecf4ff;
+        color: #18304f;
         background:
-          radial-gradient(circle at top left, rgba(90, 173, 255, 0.32), transparent 32%),
-          linear-gradient(160deg, #10243d, #050b16 72%);
+          radial-gradient(circle at top left, rgba(255, 188, 136, 0.3), transparent 24%),
+          radial-gradient(circle at top right, rgba(126, 211, 255, 0.32), transparent 26%),
+          linear-gradient(180deg, #fffefb 0%, #f5f9ff 48%, #edf5ff 100%);
       }
 
       main {
@@ -22,37 +31,74 @@
       }
 
       h1 {
-        margin-bottom: 12px;
-        font-size: clamp(2rem, 4vw, 3.2rem);
+        margin: 0 0 12px;
+        font-size: clamp(2.3rem, 4vw, 3.5rem);
+        line-height: 1.05;
+        letter-spacing: -0.04em;
       }
 
       p {
-        color: #bfd2ef;
-        line-height: 1.6;
+        color: #49627f;
+        line-height: 1.7;
+      }
+
+      code {
+        padding: 0.1rem 0.4rem;
+        border-radius: 999px;
+        color: #154067;
+        background: rgba(112, 163, 255, 0.14);
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        margin-bottom: 18px;
+        padding: 0.45rem 0.8rem;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #245786;
+        background: rgba(255, 255, 255, 0.78);
+        box-shadow: 0 18px 45px rgba(122, 157, 193, 0.18);
+      }
+
+      .lead {
+        max-width: 62ch;
+        font-size: 1.05rem;
       }
 
       .cards {
         display: grid;
         gap: 16px;
-        margin-top: 28px;
+        margin-top: 32px;
       }
 
       .card {
         padding: 18px 20px;
-        border: 1px solid rgba(191, 210, 239, 0.16);
-        border-radius: 18px;
-        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(118, 151, 185, 0.22);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.72);
+        box-shadow: 0 20px 50px rgba(158, 183, 210, 0.2);
+        backdrop-filter: blur(14px);
+      }
+
+      strong {
+        color: #18304f;
       }
 
       a {
-        color: #8ee5cf;
+        color: #0069a9;
       }
     </style>
   </head>
   <body>
     <main>
-      <h1>Local Fixture Loaded</h1>
-      <p>
+      <div class="eyebrow">Fixture Ready</div>
+      <h1>Your local launchpad is up and humming.</h1>
+      <p class="lead">
         This page ships with the repo so the first launch exercises a <code>file://</code> navigation before
         you wire in tabs, agents, or Playwright.
       </p>
@@ -73,4 +119,3 @@
     </main>
   </body>
 </html>
-

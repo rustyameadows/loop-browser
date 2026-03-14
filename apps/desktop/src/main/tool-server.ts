@@ -5,6 +5,8 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import type {
   ArtifactRecord,
+  FeedbackCommand,
+  FeedbackState,
   McpRecentRequest,
   McpRequestOutcome,
   McpSelfTestSummary,
@@ -59,6 +61,8 @@ export interface ToolServerRuntime {
   executeNavigationCommand(command: NavigationCommand): Promise<NavigationState>;
   executePickerCommand(command: PickerCommand): Promise<PickerState>;
   getPickerState(): PickerState;
+  executeFeedbackCommand(command: FeedbackCommand): Promise<FeedbackState>;
+  getFeedbackState(): FeedbackState;
   getMarkdownForCurrentPage(forceRefresh?: boolean): Promise<MarkdownViewState>;
   getWindowState(): WindowState;
   resizeWindow(request: ResizeWindowRequest): Promise<WindowState>;
@@ -143,6 +147,82 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'feedback.getState',
+    description: 'Return the current feedback state, including draft and captured annotations.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'feedback.list',
+    description: 'List saved feedback annotations. Optionally filter by status.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        status: {
+          type: 'string',
+          enum: ['open', 'acknowledged', 'in_progress', 'resolved', 'dismissed'],
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'feedback.create',
+    description: 'Create a feedback annotation from the last picked element.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string' },
+        note: { type: 'string' },
+        kind: {
+          type: 'string',
+          enum: ['bug', 'change', 'question', 'praise'],
+        },
+        priority: {
+          type: 'string',
+          enum: ['low', 'medium', 'high', 'critical'],
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'feedback.reply',
+    description: 'Add an agent or human reply to an existing annotation.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        annotationId: { type: 'string' },
+        body: { type: 'string' },
+        author: {
+          type: 'string',
+          enum: ['human', 'agent', 'system'],
+        },
+      },
+      required: ['annotationId', 'body'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'feedback.setStatus',
+    description: 'Update the lifecycle status for a saved annotation.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        annotationId: { type: 'string' },
+        status: {
+          type: 'string',
+          enum: ['open', 'acknowledged', 'in_progress', 'resolved', 'dismissed'],
+        },
+      },
+      required: ['annotationId', 'status'],
       additionalProperties: false,
     },
   },
@@ -795,6 +875,95 @@ export class ToolServer {
       case 'picker.lastSelection':
         return toolResult({
           picker: this.runtime.getPickerState(),
+        });
+      case 'feedback.getState':
+        return toolResult({
+          feedback: this.runtime.getFeedbackState(),
+        });
+      case 'feedback.list': {
+        const state = this.runtime.getFeedbackState();
+        const annotations =
+          typeof args.status === 'string'
+            ? state.annotations.filter((annotation) => annotation.status === args.status)
+            : state.annotations;
+        return toolResult({ annotations });
+      }
+      case 'feedback.create': {
+        const selection = this.runtime.getPickerState().lastSelection;
+        if (!selection) {
+          throw new Error('feedback.create requires an existing picker selection.');
+        }
+
+        await this.runtime.executeFeedbackCommand({
+          action: 'startDraftFromSelection',
+          selection,
+        });
+        await this.runtime.executeFeedbackCommand({
+          action: 'updateDraft',
+          summary: typeof args.summary === 'string' ? args.summary : undefined,
+          note: typeof args.note === 'string' ? args.note : undefined,
+          kind:
+            args.kind === 'bug' ||
+            args.kind === 'change' ||
+            args.kind === 'question' ||
+            args.kind === 'praise'
+              ? args.kind
+              : undefined,
+          priority:
+            args.priority === 'low' ||
+            args.priority === 'medium' ||
+            args.priority === 'high' ||
+            args.priority === 'critical'
+              ? args.priority
+              : undefined,
+        });
+        const feedback = await this.runtime.executeFeedbackCommand({ action: 'submitDraft' });
+        return toolResult({
+          feedback,
+          annotation: feedback.annotations[0] ?? null,
+        });
+      }
+      case 'feedback.reply':
+        if (typeof args.annotationId !== 'string' || args.annotationId.trim().length === 0) {
+          throw new Error('feedback.reply requires a non-empty annotationId.');
+        }
+
+        if (typeof args.body !== 'string' || args.body.trim().length === 0) {
+          throw new Error('feedback.reply requires a non-empty body.');
+        }
+
+        return toolResult({
+          feedback: await this.runtime.executeFeedbackCommand({
+            action: 'reply',
+            annotationId: args.annotationId,
+            body: args.body,
+            author:
+              args.author === 'human' || args.author === 'system' || args.author === 'agent'
+                ? args.author
+                : 'agent',
+          }),
+        });
+      case 'feedback.setStatus':
+        if (typeof args.annotationId !== 'string' || args.annotationId.trim().length === 0) {
+          throw new Error('feedback.setStatus requires a non-empty annotationId.');
+        }
+
+        if (
+          args.status !== 'open' &&
+          args.status !== 'acknowledged' &&
+          args.status !== 'in_progress' &&
+          args.status !== 'resolved' &&
+          args.status !== 'dismissed'
+        ) {
+          throw new Error('feedback.setStatus requires a valid status.');
+        }
+
+        return toolResult({
+          feedback: await this.runtime.executeFeedbackCommand({
+            action: 'setStatus',
+            annotationId: args.annotationId,
+            status: args.status,
+          }),
         });
       case 'page.viewAsMarkdown': {
         const markdownView = await this.runtime.getMarkdownForCurrentPage(

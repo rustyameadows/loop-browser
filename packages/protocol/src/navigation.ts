@@ -1,5 +1,6 @@
 import type { McpViewCommand, McpViewState } from './mcp';
 import type { MarkdownViewCommand, MarkdownViewState } from './markdown';
+import type { FeedbackCommand, FeedbackState } from './feedback';
 
 export const NAVIGATION_COMMAND_CHANNEL = 'navigation:command';
 export const NAVIGATION_GET_STATE_CHANNEL = 'navigation:get-state';
@@ -44,6 +45,9 @@ export interface ElementDescriptor {
   tag: string;
   id: string | null;
   classList: string[];
+  role: string | null;
+  accessibleName: string | null;
+  playwrightLocator: string | null;
   textSnippet: string;
   bbox: BoundingBox;
   attributes: Record<string, string>;
@@ -99,6 +103,9 @@ export interface NavigationBridge {
   executeMcpView(command: McpViewCommand): Promise<McpViewState>;
   getMcpViewState(): Promise<McpViewState>;
   subscribeMcpView(listener: (state: McpViewState) => void): () => void;
+  executeFeedback(command: FeedbackCommand): Promise<FeedbackState>;
+  getFeedbackState(): Promise<FeedbackState>;
+  subscribeFeedback(listener: (state: FeedbackState) => void): () => void;
   copyText(value: string): void;
 }
 
@@ -177,6 +184,9 @@ export const isElementDescriptor = (value: unknown): value is ElementDescriptor 
     (typeof value.id === 'string' || value.id === null) &&
     Array.isArray(value.classList) &&
     value.classList.every((entry) => typeof entry === 'string') &&
+    (typeof value.role === 'string' || value.role === null) &&
+    (typeof value.accessibleName === 'string' || value.accessibleName === null) &&
+    (typeof value.playwrightLocator === 'string' || value.playwrightLocator === null) &&
     typeof value.textSnippet === 'string' &&
     isBoundingBox(value.bbox) &&
     isPlainStringRecord(value.attributes) &&

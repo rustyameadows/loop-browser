@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  createEmptyFeedbackState,
   createEmptyMarkdownViewState,
   createEmptyNavigationState,
   createEmptyPickerState,
@@ -27,6 +28,37 @@ describe('ToolServer', () => {
     let lastNavigationTarget: string | null = null;
     let lastResizeTarget: { width: number; height: number; target?: string } | null = null;
     let screenshotCounter = 0;
+    const currentPickerState = {
+      ...createEmptyPickerState(),
+      lastSelection: {
+        selector: '#cta',
+        xpath: '//*[@id="cta"]',
+        tag: 'button',
+        id: 'cta',
+        classList: ['primary'],
+        role: 'button',
+        accessibleName: 'Launch',
+        playwrightLocator: "getByRole('button', { name: 'Launch' })",
+        textSnippet: 'Launch',
+        bbox: {
+          x: 10,
+          y: 12,
+          width: 120,
+          height: 32,
+          devicePixelRatio: 2,
+        },
+        attributes: {
+          role: 'button',
+          'data-testid': 'cta',
+        },
+        outerHTMLExcerpt: '<button id="cta">Launch</button>',
+        frame: {
+          url: 'https://example.com',
+          isMainFrame: true,
+        },
+      },
+    };
+    let feedbackState = createEmptyFeedbackState();
 
     const server = new ToolServer({
       runtime: {
@@ -46,13 +78,108 @@ describe('ToolServer', () => {
           };
         },
         executePickerCommand: async (command) => ({
-          ...createEmptyPickerState(),
+          ...currentPickerState,
           enabled: command.action === 'enable',
         }),
-        getPickerState: () => ({
-          ...createEmptyPickerState(),
-          lastSelection: null,
-        }),
+        getPickerState: () => currentPickerState,
+        executeFeedbackCommand: async (command) => {
+          switch (command.action) {
+            case 'startDraftFromSelection':
+              feedbackState = {
+                ...feedbackState,
+                draft: {
+                  ...feedbackState.draft,
+                  selection: command.selection,
+                  summary: 'button: Launch',
+                  sourceUrl: 'https://example.com',
+                  sourceTitle: 'Example Domain',
+                },
+              };
+              break;
+            case 'updateDraft':
+              feedbackState = {
+                ...feedbackState,
+                draft: {
+                  ...feedbackState.draft,
+                  summary:
+                    typeof command.summary === 'string'
+                      ? command.summary
+                      : feedbackState.draft.summary,
+                  note:
+                    typeof command.note === 'string'
+                      ? command.note
+                      : feedbackState.draft.note,
+                  kind: command.kind ?? feedbackState.draft.kind,
+                  priority: command.priority ?? feedbackState.draft.priority,
+                },
+              };
+              break;
+            case 'submitDraft':
+              if (feedbackState.draft.selection) {
+                feedbackState = {
+                  ...feedbackState,
+                  annotations: [
+                    {
+                      id: 'annotation-1',
+                      selection: feedbackState.draft.selection,
+                      summary: feedbackState.draft.summary,
+                      note: feedbackState.draft.note,
+                      kind: feedbackState.draft.kind,
+                      priority: feedbackState.draft.priority,
+                      status: 'open',
+                      createdAt: '2026-03-14T00:00:00.000Z',
+                      updatedAt: '2026-03-14T00:00:00.000Z',
+                      url: 'https://example.com',
+                      pageTitle: 'Example Domain',
+                      replies: [],
+                    },
+                  ],
+                  draft: createEmptyFeedbackState().draft,
+                  activeAnnotationId: 'annotation-1',
+                };
+              }
+              break;
+            case 'reply':
+              feedbackState = {
+                ...feedbackState,
+                annotations: feedbackState.annotations.map((annotation) =>
+                  annotation.id === command.annotationId
+                    ? {
+                        ...annotation,
+                        replies: [
+                          ...annotation.replies,
+                          {
+                            id: 'reply-1',
+                            author: command.author ?? 'agent',
+                            body: command.body,
+                            createdAt: '2026-03-14T00:00:01.000Z',
+                          },
+                        ],
+                      }
+                    : annotation,
+                ),
+              };
+              break;
+            case 'setStatus':
+              feedbackState = {
+                ...feedbackState,
+                annotations: feedbackState.annotations.map((annotation) =>
+                  annotation.id === command.annotationId
+                    ? {
+                        ...annotation,
+                        status: command.status,
+                      }
+                    : annotation,
+                ),
+              };
+              break;
+            default:
+              break;
+          }
+
+          return feedbackState;
+        },
+        getFeedbackState: () => feedbackState,
         getMarkdownForCurrentPage: async () => ({
           ...createEmptyMarkdownViewState(),
           status: 'ready',
@@ -165,9 +292,130 @@ describe('ToolServer', () => {
       };
     };
     expect(toolsPayload.result.tools.map((tool) => tool.name)).toContain('page.navigate');
+    expect(toolsPayload.result.tools.map((tool) => tool.name)).toContain('feedback.getState');
     expect(toolsPayload.result.tools.map((tool) => tool.name)).toContain('page.viewAsMarkdown');
     expect(toolsPayload.result.tools.map((tool) => tool.name)).toContain('page.screenshot');
     expect(toolsPayload.result.tools.map((tool) => tool.name)).toContain('artifacts.get');
+
+    const feedbackCreateResponse = await fetch(connection.url, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${connection.token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'feedback-create',
+        method: 'tools/call',
+        params: {
+          name: 'feedback.create',
+          arguments: {
+            summary: 'Button copy is vague',
+            note: 'This CTA should explain what happens next.',
+            kind: 'change',
+            priority: 'high',
+          },
+        },
+      }),
+    });
+
+    const feedbackCreatePayload = (await feedbackCreateResponse.json()) as {
+      result: {
+        structuredContent: {
+          annotation: {
+            id: string;
+            summary: string;
+            priority: string;
+          };
+        };
+      };
+    };
+    expect(feedbackCreateResponse.status).toBe(200);
+    expect(feedbackCreatePayload.result.structuredContent.annotation.summary).toBe(
+      'Button copy is vague',
+    );
+    expect(feedbackCreatePayload.result.structuredContent.annotation.priority).toBe('high');
+
+    const feedbackReplyResponse = await fetch(connection.url, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${connection.token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'feedback-reply',
+        method: 'tools/call',
+        params: {
+          name: 'feedback.reply',
+          arguments: {
+            annotationId: 'annotation-1',
+            body: 'I can tighten the CTA copy in the next pass.',
+            author: 'agent',
+          },
+        },
+      }),
+    });
+    expect(feedbackReplyResponse.status).toBe(200);
+
+    const feedbackStatusResponse = await fetch(connection.url, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${connection.token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'feedback-status',
+        method: 'tools/call',
+        params: {
+          name: 'feedback.setStatus',
+          arguments: {
+            annotationId: 'annotation-1',
+            status: 'in_progress',
+          },
+        },
+      }),
+    });
+    expect(feedbackStatusResponse.status).toBe(200);
+
+    const feedbackStateResponse = await fetch(connection.url, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${connection.token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'feedback-state',
+        method: 'tools/call',
+        params: {
+          name: 'feedback.getState',
+          arguments: {},
+        },
+      }),
+    });
+
+    const feedbackStatePayload = (await feedbackStateResponse.json()) as {
+      result: {
+        structuredContent: {
+          feedback: {
+            annotations: Array<{
+              id: string;
+              status: string;
+              replies: Array<{ author: string }>;
+            }>;
+          };
+        };
+      };
+    };
+    expect(feedbackStateResponse.status).toBe(200);
+    expect(feedbackStatePayload.result.structuredContent.feedback.annotations[0]?.status).toBe(
+      'in_progress',
+    );
+    expect(
+      feedbackStatePayload.result.structuredContent.feedback.annotations[0]?.replies[0]?.author,
+    ).toBe('agent');
 
     const navigateResponse = await fetch(connection.url, {
       method: 'POST',
@@ -524,6 +772,8 @@ describe('ToolServer', () => {
         executeNavigationCommand: async () => createEmptyNavigationState(),
         executePickerCommand: async () => createEmptyPickerState(),
         getPickerState: () => createEmptyPickerState(),
+        executeFeedbackCommand: async () => createEmptyFeedbackState(),
+        getFeedbackState: () => createEmptyFeedbackState(),
         getMarkdownForCurrentPage: async () => createEmptyMarkdownViewState(),
         getWindowState: () => ({
           outerBounds: { x: 0, y: 0, width: 1200, height: 800 },

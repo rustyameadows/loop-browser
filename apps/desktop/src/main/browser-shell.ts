@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import {
   BaseWindow,
   WebContentsView,
@@ -12,6 +13,9 @@ import {
   shell,
 } from 'electron';
 import {
+  FEEDBACK_COMMAND_CHANNEL,
+  FEEDBACK_GET_STATE_CHANNEL,
+  FEEDBACK_STATE_CHANNEL,
   type ResizeWindowRequest,
   type ScreenshotFormat,
   type ScreenshotRequest,
@@ -31,15 +35,22 @@ import {
   PICKER_COMMAND_CHANNEL,
   PICKER_GET_STATE_CHANNEL,
   PICKER_STATE_CHANNEL,
+  createEmptyFeedbackDraft,
+  createEmptyFeedbackState,
   createEmptyMcpViewState,
   createEmptyMarkdownViewState,
   createEmptyNavigationState,
   createEmptyPickerState,
+  isFeedbackCommand,
   isMcpViewCommand,
   isMarkdownViewCommand,
   isNavigationCommand,
   isPagePickerEvent,
   isPickerCommand,
+  type FeedbackAnnotation,
+  type FeedbackAuthor,
+  type FeedbackCommand,
+  type FeedbackState,
   type McpViewCommand,
   type McpViewState,
   type MarkdownViewCommand,
@@ -66,9 +77,9 @@ import { fixtureFileUrl, isSafeExternalUrl, normalizeAddress } from './url';
 
 export const PRIMARY_TAB_ID = 'tab-1';
 
-type TrustedSurface = 'chrome' | 'markdown' | 'mcp';
+type TrustedSurface = 'chrome' | 'markdown' | 'mcp' | 'feedback';
 
-type SidePanelKind = 'markdown' | 'mcp';
+type SidePanelKind = 'markdown' | 'mcp' | 'feedback';
 
 type PageMarkupSnapshot = {
   html: string;
@@ -103,10 +114,13 @@ export class BrowserShell {
   private pageView: WebContentsView | null = null;
   private markdownPanelView: WebContentsView | null = null;
   private mcpPanelView: WebContentsView | null = null;
+  private feedbackPanelView: WebContentsView | null = null;
   private markdownPanelMounted = false;
   private mcpPanelMounted = false;
+  private feedbackPanelMounted = false;
   private lastError: string | null = null;
   private pickerState: PickerState = createEmptyPickerState();
+  private feedbackState: FeedbackState = createEmptyFeedbackState();
   private markdownViewState: MarkdownViewState = createEmptyMarkdownViewState();
   private mcpViewState: McpViewState = createEmptyMcpViewState();
   private markdownRequestId = 0;
@@ -162,6 +176,8 @@ export class BrowserShell {
     ipcMain.removeHandler(MARKDOWN_VIEW_GET_STATE_CHANNEL);
     ipcMain.removeHandler(MCP_VIEW_COMMAND_CHANNEL);
     ipcMain.removeHandler(MCP_VIEW_GET_STATE_CHANNEL);
+    ipcMain.removeHandler(FEEDBACK_COMMAND_CHANNEL);
+    ipcMain.removeHandler(FEEDBACK_GET_STATE_CHANNEL);
     ipcMain.removeAllListeners(PAGE_PICKER_EVENT_CHANNEL);
     this.mcpDiagnosticsUnsubscribe?.();
     this.mcpDiagnosticsUnsubscribe = null;
@@ -201,6 +217,10 @@ export class BrowserShell {
     void this.executeMcpViewCommand({ action: 'toggle' });
   }
 
+  toggleFeedbackView(): void {
+    void this.executeFeedbackCommand({ action: 'toggle' });
+  }
+
   listTabs(): BrowserTabSnapshot[] {
     const navigationState = this.createNavigationState();
 
@@ -235,6 +255,23 @@ export class BrowserShell {
       tools: [...this.mcpViewState.tools],
       recentRequests: this.mcpViewState.recentRequests.map((entry) => ({ ...entry })),
       lastSelfTest: { ...this.mcpViewState.lastSelfTest },
+    };
+  }
+
+  getFeedbackState(): FeedbackState {
+    return {
+      ...this.feedbackState,
+      draft: {
+        ...this.feedbackState.draft,
+        selection: this.feedbackState.draft.selection
+          ? { ...this.feedbackState.draft.selection }
+          : null,
+      },
+      annotations: this.feedbackState.annotations.map((annotation) => ({
+        ...annotation,
+        selection: { ...annotation.selection },
+        replies: annotation.replies.map((reply) => ({ ...reply })),
+      })),
     };
   }
 
@@ -399,6 +436,125 @@ export class BrowserShell {
     }
   }
 
+  async executeFeedbackCommand(command: FeedbackCommand): Promise<FeedbackState> {
+    switch (command.action) {
+      case 'open':
+        return this.openFeedbackPanel();
+      case 'close':
+        return this.closeFeedbackPanel();
+      case 'toggle':
+        return this.feedbackState.isOpen ? this.closeFeedbackPanel() : this.openFeedbackPanel();
+      case 'clearDraft':
+        this.feedbackState = {
+          ...this.feedbackState,
+          draft: createEmptyFeedbackDraft(),
+          activeAnnotationId: null,
+        };
+        this.sendFeedbackState();
+        return this.getFeedbackState();
+      case 'startDraftFromSelection':
+        this.closeMarkdownPanel(false);
+        this.closeMcpPanel(false);
+        this.feedbackState = {
+          ...this.feedbackState,
+          isOpen: true,
+          draft: {
+            selection: command.selection,
+            summary: this.buildDraftSummary(command.selection),
+            note: '',
+            kind: 'bug',
+            priority: 'medium',
+            sourceUrl: command.sourceUrl ?? this.createNavigationState().url,
+            sourceTitle: command.sourceTitle ?? this.createNavigationState().title,
+          },
+          activeAnnotationId: null,
+          lastUpdatedAt: new Date().toISOString(),
+        };
+        this.ensureFeedbackPanelMounted();
+        this.sendMarkdownViewState();
+        this.sendMcpViewState();
+        this.sendFeedbackState();
+        this.layoutViews();
+        return this.getFeedbackState();
+      case 'updateDraft':
+        this.feedbackState = {
+          ...this.feedbackState,
+          draft: {
+            ...this.feedbackState.draft,
+            summary:
+              typeof command.summary === 'string'
+                ? command.summary
+                : this.feedbackState.draft.summary,
+            note:
+              typeof command.note === 'string' ? command.note : this.feedbackState.draft.note,
+            kind: command.kind ?? this.feedbackState.draft.kind,
+            priority: command.priority ?? this.feedbackState.draft.priority,
+          },
+          lastUpdatedAt: new Date().toISOString(),
+        };
+        this.sendFeedbackState();
+        return this.getFeedbackState();
+      case 'submitDraft': {
+        const annotation = this.createAnnotationFromDraft();
+        this.feedbackState = {
+          ...this.feedbackState,
+          annotations: [annotation, ...this.feedbackState.annotations],
+          draft: createEmptyFeedbackDraft(),
+          activeAnnotationId: annotation.id,
+          lastUpdatedAt: annotation.updatedAt,
+        };
+        this.sendFeedbackState();
+        return this.getFeedbackState();
+      }
+      case 'selectAnnotation':
+        this.feedbackState = {
+          ...this.feedbackState,
+          activeAnnotationId: command.annotationId,
+        };
+        this.sendFeedbackState();
+        return this.getFeedbackState();
+      case 'setStatus':
+        this.feedbackState = {
+          ...this.feedbackState,
+          annotations: this.feedbackState.annotations.map((annotation) =>
+            annotation.id === command.annotationId
+              ? {
+                  ...annotation,
+                  status: command.status,
+                  updatedAt: new Date().toISOString(),
+                }
+              : annotation,
+          ),
+          activeAnnotationId: command.annotationId,
+          lastUpdatedAt: new Date().toISOString(),
+        };
+        this.sendFeedbackState();
+        return this.getFeedbackState();
+      case 'reply':
+        this.feedbackState = {
+          ...this.feedbackState,
+          annotations: this.feedbackState.annotations.map((annotation) =>
+            annotation.id === command.annotationId
+              ? {
+                  ...annotation,
+                  updatedAt: new Date().toISOString(),
+                  replies: [
+                    ...annotation.replies,
+                    this.createReply(command.body, command.author ?? 'human'),
+                  ],
+                }
+              : annotation,
+          ),
+          activeAnnotationId: command.annotationId,
+          lastUpdatedAt: new Date().toISOString(),
+        };
+        this.sendFeedbackState();
+        return this.getFeedbackState();
+      default:
+        return this.getFeedbackState();
+    }
+  }
+
   private registerIpcHandlers(): void {
     ipcMain.removeHandler(NAVIGATION_COMMAND_CHANNEL);
     ipcMain.removeHandler(NAVIGATION_GET_STATE_CHANNEL);
@@ -408,6 +564,8 @@ export class BrowserShell {
     ipcMain.removeHandler(MARKDOWN_VIEW_GET_STATE_CHANNEL);
     ipcMain.removeHandler(MCP_VIEW_COMMAND_CHANNEL);
     ipcMain.removeHandler(MCP_VIEW_GET_STATE_CHANNEL);
+    ipcMain.removeHandler(FEEDBACK_COMMAND_CHANNEL);
+    ipcMain.removeHandler(FEEDBACK_GET_STATE_CHANNEL);
     ipcMain.removeAllListeners(PAGE_PICKER_EVENT_CHANNEL);
 
     ipcMain.handle(
@@ -491,6 +649,24 @@ export class BrowserShell {
       return this.getMcpViewState();
     });
 
+    ipcMain.handle(
+      FEEDBACK_COMMAND_CHANNEL,
+      async (event: IpcMainInvokeEvent, payload: unknown): Promise<FeedbackState> => {
+        this.assertTrustedSender(event);
+
+        if (!isFeedbackCommand(payload)) {
+          throw new Error('Invalid feedback command payload.');
+        }
+
+        return this.executeFeedbackCommand(payload);
+      },
+    );
+
+    ipcMain.handle(FEEDBACK_GET_STATE_CHANNEL, async (event: IpcMainInvokeEvent) => {
+      this.assertTrustedSender(event);
+      return this.getFeedbackState();
+    });
+
     ipcMain.on(PAGE_PICKER_EVENT_CHANNEL, (event: IpcMainEvent, payload: unknown) => {
       if (!this.pageView || event.sender.id !== this.pageView.webContents.id) {
         return;
@@ -510,6 +686,12 @@ export class BrowserShell {
           enabled: false,
           lastSelection: payload.descriptor,
         };
+        void this.executeFeedbackCommand({
+          action: 'startDraftFromSelection',
+          selection: payload.descriptor,
+          sourceUrl: this.createNavigationState().url,
+          sourceTitle: this.createNavigationState().title,
+        });
       }
 
       this.sendPickerState();
@@ -527,6 +709,7 @@ export class BrowserShell {
       this.uiView?.webContents.id,
       this.markdownPanelView?.webContents.id,
       this.mcpPanelView?.webContents.id,
+      this.feedbackPanelView?.webContents.id,
     ].filter((value): value is number => typeof value === 'number');
 
     if (!trustedIds.includes(event.sender.id)) {
@@ -629,6 +812,7 @@ export class BrowserShell {
     view.webContents.once('did-finish-load', () => {
       this.sendNavigationState();
       this.sendPickerState();
+      this.sendFeedbackState();
       this.sendMarkdownViewState();
       this.sendMcpViewState();
     });
@@ -674,7 +858,9 @@ export class BrowserShell {
     const contentHeight = Math.max(height - CHROME_HEIGHT, 0);
     const activeSidePanel = this.getActiveSidePanel();
     const activeSidePanelView =
-      activeSidePanel === 'markdown'
+      activeSidePanel === 'feedback'
+        ? this.feedbackPanelView
+        : activeSidePanel === 'markdown'
         ? this.markdownPanelView
         : activeSidePanel === 'mcp'
           ? this.mcpPanelView
@@ -728,7 +914,7 @@ export class BrowserShell {
       height: contentHeight,
     });
 
-    for (const panelView of [this.markdownPanelView, this.mcpPanelView]) {
+    for (const panelView of [this.feedbackPanelView, this.markdownPanelView, this.mcpPanelView]) {
       if (!panelView) {
         continue;
       }
@@ -993,8 +1179,112 @@ export class BrowserShell {
     return Math.min(Math.max(Math.round(value), 1), 100);
   }
 
+  private buildDraftSummary(selection: FeedbackState['draft']['selection']): string {
+    if (!selection) {
+      return '';
+    }
+
+    const primary = selection.accessibleName || selection.textSnippet || selection.selector;
+    const descriptor = selection.role || selection.tag;
+    return `${descriptor}: ${primary}`.slice(0, 120);
+  }
+
+  private createReply(body: string, author: FeedbackAuthor): FeedbackAnnotation['replies'][number] {
+    return {
+      id: randomUUID(),
+      author,
+      body: body.trim(),
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  private createAnnotationFromDraft(): FeedbackAnnotation {
+    const selection = this.feedbackState.draft.selection;
+    if (!selection) {
+      throw new Error('Pick an element before saving feedback.');
+    }
+
+    const summary = this.feedbackState.draft.summary.trim() || this.buildDraftSummary(selection);
+    const note = this.feedbackState.draft.note.trim();
+    const timestamp = new Date().toISOString();
+
+    return {
+      id: randomUUID(),
+      selection,
+      summary,
+      note,
+      kind: this.feedbackState.draft.kind,
+      priority: this.feedbackState.draft.priority,
+      status: 'open',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      url: this.feedbackState.draft.sourceUrl || this.createNavigationState().url,
+      pageTitle: this.feedbackState.draft.sourceTitle || this.createNavigationState().title,
+      replies: note
+        ? [
+            {
+              id: randomUUID(),
+              author: 'human',
+              body: note,
+              createdAt: timestamp,
+            },
+          ]
+        : [],
+    };
+  }
+
+  private openFeedbackPanel(): FeedbackState {
+    this.closeMarkdownPanel(false);
+    this.closeMcpPanel(false);
+    this.ensureFeedbackPanelMounted();
+    this.feedbackState = {
+      ...this.feedbackState,
+      isOpen: true,
+      lastUpdatedAt: new Date().toISOString(),
+    };
+    this.layoutViews();
+    this.sendMarkdownViewState();
+    this.sendMcpViewState();
+    this.sendFeedbackState();
+    return this.getFeedbackState();
+  }
+
+  private closeFeedbackPanel(notify = true): FeedbackState {
+    if (this.window && this.feedbackPanelView && this.feedbackPanelMounted) {
+      this.window.contentView.removeChildView(this.feedbackPanelView);
+      this.feedbackPanelMounted = false;
+    }
+
+    this.feedbackState = {
+      ...this.feedbackState,
+      isOpen: false,
+      lastUpdatedAt: new Date().toISOString(),
+    };
+    this.layoutViews();
+    if (notify) {
+      this.sendFeedbackState();
+    }
+    return this.getFeedbackState();
+  }
+
+  private ensureFeedbackPanelMounted(): void {
+    if (!this.window) {
+      throw new Error('Window is not ready.');
+    }
+
+    if (!this.feedbackPanelView) {
+      this.feedbackPanelView = this.createTrustedView('feedback');
+    }
+
+    if (!this.feedbackPanelMounted) {
+      this.window.contentView.addChildView(this.feedbackPanelView);
+      this.feedbackPanelMounted = true;
+    }
+  }
+
   private async openMarkdownPanel(): Promise<MarkdownViewState> {
-    this.closeMcpPanel();
+    this.closeFeedbackPanel(false);
+    this.closeMcpPanel(false);
     this.ensureMarkdownPanelMounted();
 
     this.markdownViewState = {
@@ -1004,6 +1294,8 @@ export class BrowserShell {
       lastError: this.createNavigationState().isLoading ? null : this.markdownViewState.lastError,
     };
     this.layoutViews();
+    this.sendFeedbackState();
+    this.sendMcpViewState();
     this.sendMarkdownViewState();
 
     return this.refreshMarkdownView(false);
@@ -1042,7 +1334,8 @@ export class BrowserShell {
   }
 
   private openMcpPanel(): McpViewState {
-    this.closeMarkdownPanel();
+    this.closeFeedbackPanel(false);
+    this.closeMarkdownPanel(false);
     this.ensureMcpPanelMounted();
     this.syncMcpViewState(false);
     this.mcpViewState = {
@@ -1050,6 +1343,8 @@ export class BrowserShell {
       isOpen: true,
     };
     this.layoutViews();
+    this.sendFeedbackState();
+    this.sendMarkdownViewState();
     this.sendMcpViewState();
     return this.getMcpViewState();
   }
@@ -1190,6 +1485,10 @@ export class BrowserShell {
   }
 
   private getActiveSidePanel(): SidePanelKind | null {
+    if (this.feedbackState.isOpen && this.feedbackPanelView && this.feedbackPanelMounted) {
+      return 'feedback';
+    }
+
     if (this.mcpViewState.isOpen && this.mcpPanelView && this.mcpPanelMounted) {
       return 'mcp';
     }
@@ -1230,6 +1529,16 @@ export class BrowserShell {
 
     this.pickerState = createEmptyPickerState();
     this.sendPickerState();
+
+    if (this.feedbackState.draft.selection) {
+      this.feedbackState = {
+        ...this.feedbackState,
+        draft: createEmptyFeedbackDraft(),
+        activeAnnotationId: null,
+        lastUpdatedAt: new Date().toISOString(),
+      };
+      this.sendFeedbackState();
+    }
   }
 
   private invalidateMarkdownCache(): void {
@@ -1285,6 +1594,10 @@ export class BrowserShell {
     this.sendToTrustedViews(PICKER_STATE_CHANNEL, this.getPickerState());
   }
 
+  private sendFeedbackState(): void {
+    this.sendToTrustedViews(FEEDBACK_STATE_CHANNEL, this.getFeedbackState());
+  }
+
   private sendMarkdownViewState(): void {
     this.sendToTrustedViews(MARKDOWN_VIEW_STATE_CHANNEL, this.getMarkdownViewState());
   }
@@ -1294,7 +1607,7 @@ export class BrowserShell {
   }
 
   private sendToTrustedViews(channel: string, payload: unknown): void {
-    for (const view of [this.uiView, this.markdownPanelView, this.mcpPanelView]) {
+    for (const view of [this.uiView, this.feedbackPanelView, this.markdownPanelView, this.mcpPanelView]) {
       if (!view || view.webContents.isDestroyed()) {
         continue;
       }
@@ -1304,14 +1617,17 @@ export class BrowserShell {
   }
 
   private destroyWindow(): void {
+    this.closeManagedView(this.feedbackPanelView);
     this.closeManagedView(this.mcpPanelView);
     this.closeManagedView(this.markdownPanelView);
     this.closeManagedView(this.pageView);
     this.closeManagedView(this.uiView);
+    this.feedbackPanelView = null;
     this.mcpPanelView = null;
     this.markdownPanelView = null;
     this.pageView = null;
     this.uiView = null;
+    this.feedbackPanelMounted = false;
     this.mcpPanelMounted = false;
     this.markdownPanelMounted = false;
     this.window = null;

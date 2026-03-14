@@ -4,7 +4,13 @@ import {
   PAGE_PICKER_EVENT_CHANNEL,
   isPagePickerControl,
 } from '@agent-browser/protocol';
-import { createElementDescriptor } from '@agent-browser/selector';
+import {
+  createAccessibleName,
+  createElementDescriptor,
+  createPlaywrightLocator,
+  createStableSelector,
+  inferRole,
+} from '@agent-browser/selector';
 
 const OVERLAY_ROOT_ID = '__agent_browser_picker_overlay__';
 
@@ -12,6 +18,7 @@ type OverlayElements = {
   root: HTMLDivElement;
   box: HTMLDivElement;
   label: HTMLDivElement;
+  hint: HTMLDivElement;
 };
 
 const state: {
@@ -28,19 +35,21 @@ const state: {
   animationFrame: null,
 };
 
-const describeElement = (element: Element): string => {
-  const parts = [element.localName];
+const describeElement = (element: Element): { title: string; meta: string } => {
+  const role = inferRole(element);
+  const accessibleName = createAccessibleName(element);
+  const selector = createStableSelector(element);
+  const locator = createPlaywrightLocator(element);
 
-  if (element.id) {
-    parts.push(`#${element.id}`);
+  const titleParts = [role ?? element.localName];
+  if (accessibleName) {
+    titleParts.push(`"${accessibleName}"`);
   }
 
-  const className = Array.from(element.classList).slice(0, 2).join('.');
-  if (className) {
-    parts.push(`.${className}`);
-  }
-
-  return parts.join('');
+  return {
+    title: titleParts.join(' '),
+    meta: locator ?? selector,
+  };
 };
 
 const ensureOverlay = (): OverlayElements => {
@@ -81,23 +90,43 @@ const ensureOverlay = (): OverlayElements => {
     [
       'position:fixed',
       'max-width:min(360px, calc(100vw - 24px))',
-      'padding:6px 10px',
-      'border-radius:999px',
+      'padding:10px 12px',
+      'border-radius:14px',
       'background:rgba(11,22,39,0.96)',
       'color:#f6f8fc',
       'font-size:12px',
       'font-weight:600',
       'letter-spacing:0.01em',
       'display:none',
-      'white-space:nowrap',
-      'overflow:hidden',
-      'text-overflow:ellipsis',
+      'line-height:1.4',
+      'box-shadow:0 18px 30px rgba(9,16,28,0.25)',
+      'white-space:normal',
     ].join(';'),
   );
 
-  root.append(box, label);
+  const hint = document.createElement('div');
+  hint.textContent = 'Click to add feedback • Esc to cancel';
+  hint.setAttribute(
+    'style',
+    [
+      'position:fixed',
+      'right:14px',
+      'bottom:14px',
+      'padding:9px 12px',
+      'border-radius:999px',
+      'background:rgba(11,22,39,0.96)',
+      'color:#f6f8fc',
+      'font-size:11px',
+      'font-weight:700',
+      'letter-spacing:0.02em',
+      'box-shadow:0 18px 30px rgba(9,16,28,0.25)',
+      'display:none',
+    ].join(';'),
+  );
+
+  root.append(box, label, hint);
   document.documentElement.append(root);
-  state.overlay = { root, box, label };
+  state.overlay = { root, box, label, hint };
   return state.overlay;
 };
 
@@ -109,6 +138,7 @@ const hideOverlay = (): void => {
   state.overlay.root.style.display = 'none';
   state.overlay.box.style.display = 'none';
   state.overlay.label.style.display = 'none';
+  state.overlay.hint.style.display = 'none';
 };
 
 const renderOverlay = (): void => {
@@ -124,23 +154,40 @@ const renderOverlay = (): void => {
     overlay.root.style.display = 'block';
     overlay.box.style.display = 'none';
     overlay.label.style.display = 'none';
+    overlay.hint.style.display = 'block';
     return;
   }
 
-  const labelText = describeElement(state.hoveredElement);
+  const labelCopy = describeElement(state.hoveredElement);
   overlay.root.style.display = 'block';
   overlay.box.style.display = 'block';
   overlay.label.style.display = 'block';
+  overlay.hint.style.display = 'block';
   overlay.box.style.left = `${rect.left}px`;
   overlay.box.style.top = `${rect.top}px`;
   overlay.box.style.width = `${rect.width}px`;
   overlay.box.style.height = `${rect.height}px`;
-  overlay.label.textContent = labelText;
+  const labelTitle = document.createElement('div');
+  labelTitle.textContent = labelCopy.title;
+  labelTitle.style.fontSize = '12px';
+  labelTitle.style.fontWeight = '700';
+  labelTitle.style.color = '#f8fbff';
 
-  const preferredTop = Math.max(rect.top - 36, 8);
+  const labelMeta = document.createElement('div');
+  labelMeta.textContent = labelCopy.meta;
+  labelMeta.style.marginTop = '4px';
+  labelMeta.style.fontSize = '11px';
+  labelMeta.style.fontWeight = '500';
+  labelMeta.style.color = 'rgba(226,233,244,0.88)';
+  labelMeta.style.fontFamily = "'SF Mono','JetBrains Mono',ui-monospace,monospace";
+  labelMeta.style.wordBreak = 'break-word';
+
+  overlay.label.replaceChildren(labelTitle, labelMeta);
+
+  const preferredTop = Math.max(rect.top - 68, 8);
   const preferredLeft = Math.min(
     Math.max(rect.left, 8),
-    Math.max(window.innerWidth - 280, 8),
+    Math.max(window.innerWidth - 372, 8),
   );
   overlay.label.style.left = `${preferredLeft}px`;
   overlay.label.style.top = `${preferredTop}px`;

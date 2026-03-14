@@ -54,6 +54,11 @@ export const installAppMenu = (browserShell: BrowserShell): void => {
       click: () => browserShell.togglePicker(),
     },
     {
+      label: 'Toggle Feedback View',
+      accelerator: 'Alt+CmdOrCtrl+K',
+      click: () => browserShell.toggleFeedbackView(),
+    },
+    {
       label: 'Toggle Markdown View',
       accelerator: 'Alt+CmdOrCtrl+M',
       click: () => browserShell.toggleMarkdownView(),
