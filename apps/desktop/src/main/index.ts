@@ -20,13 +20,24 @@ const toolServer = new ToolServer({
   storageDir: app.getPath('userData'),
   port: runtimeConfig.toolServerPort,
 });
+browserShell.attachMcpDiagnostics({
+  getDiagnostics: () => toolServer.getDiagnostics(),
+  subscribe: (listener) => toolServer.subscribe(listener),
+  runSelfTest: () => toolServer.runSelfTest(),
+});
 installAppMenu(browserShell);
 
 app.whenReady().then(() => {
   browserShell.ensureWindow();
-  void toolServer.start().catch((error) => {
-    console.error('Failed to start Agent Browser tool server.', error);
-  });
+  void toolServer
+    .start()
+    .then(() => toolServer.runSelfTest())
+    .catch((error) => {
+      const message =
+        error instanceof Error ? error.message : 'Failed to start Agent Browser tool server.';
+      toolServer.reportLifecycleError(message);
+      console.error('Failed to start Agent Browser tool server.', error);
+    });
 
   app.on('activate', () => {
     browserShell.ensureWindow();
@@ -41,6 +52,9 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   void toolServer.stop().catch((error) => {
+    const message =
+      error instanceof Error ? error.message : 'Failed to stop Agent Browser tool server cleanly.';
+    toolServer.reportLifecycleError(message);
     console.error('Failed to stop Agent Browser tool server cleanly.', error);
   });
   browserShell.dispose();

@@ -1,3 +1,4 @@
+import type { McpViewCommand, McpViewState } from './mcp';
 import type { MarkdownViewCommand, MarkdownViewState } from './markdown';
 
 export const NAVIGATION_COMMAND_CHANNEL = 'navigation:command';
@@ -95,6 +96,9 @@ export interface NavigationBridge {
   executeMarkdownView(command: MarkdownViewCommand): Promise<MarkdownViewState>;
   getMarkdownViewState(): Promise<MarkdownViewState>;
   subscribeMarkdownView(listener: (state: MarkdownViewState) => void): () => void;
+  executeMcpView(command: McpViewCommand): Promise<McpViewState>;
+  getMcpViewState(): Promise<McpViewState>;
+  subscribeMcpView(listener: (state: McpViewState) => void): () => void;
   copyText(value: string): void;
 }
 

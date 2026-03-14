@@ -23,6 +23,8 @@ The chrome also includes a DOM pick mode. Use the crosshair button or `View > To
 
 The top toolbar now also includes `View as MD`. That button opens a dedicated trusted Markdown panel beside the page view, snapshots the active page DOM in the main process, converts it with Defuddle, and exposes the raw Markdown plus page metadata. Use the panel actions to copy or refresh the extracted Markdown for the current page.
 
+The toolbar also includes `MCP Status`, a live red/yellow/green indicator for the local MCP server. That button opens a dedicated diagnostics panel with the current transport URL, registration manifest path, exposed tools, recent request activity, and a built-in self-test against `/health`, `initialize`, and `tools/list`.
+
 While the app is running, the main process also starts a localhost JSON-RPC tool server at `127.0.0.1`. The current registration manifest is written to `~/Library/Application Support/Agent Browser/mcp-registration.json` on macOS and includes the URL plus bearer token header needed by local tool clients. The current tool set includes `browser.listTabs`, `page.navigate`, `picker.enable`, `picker.disable`, `picker.lastSelection`, and `page.viewAsMarkdown`.
 
 For deterministic MCP verification, use `npm run smoke:mcp` for the full local flow, or `npm run smoke:mcp:dev` / `npm run smoke:mcp:packaged` after `npm run build`. The smoke harness launches the app with isolated `AGENT_BROWSER_USER_DATA_DIR`, `AGENT_BROWSER_TOOL_SERVER_PORT`, and `AGENT_BROWSER_START_URL` overrides so it never reuses your normal profile.

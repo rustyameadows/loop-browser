@@ -71,6 +71,8 @@ describe('ToolServer', () => {
     });
 
     const connection = await server.start();
+    expect(server.getDiagnostics().lifecycle).toBe('listening');
+    expect(server.getDiagnostics().tools).toContain('page.viewAsMarkdown');
 
     const unauthorized = await fetch(connection.url, {
       method: 'POST',
@@ -192,9 +194,45 @@ describe('ToolServer', () => {
     expect(markdownPayload.result.structuredContent.title).toBe('Example Domain');
     expect(markdownPayload.result.structuredContent.markdown).toContain('# Example Domain');
 
+    const diagnosticsAfterCalls = server.getDiagnostics();
+    expect(diagnosticsAfterCalls.requestCount).toBeGreaterThanOrEqual(4);
+    expect(diagnosticsAfterCalls.recentRequests[0]?.detail).toBe('page.viewAsMarkdown');
+
     const registrationStats = await stat(connection.registrationFile);
     expect(registrationStats.isFile()).toBe(true);
 
+    const selfTestDiagnostics = await server.runSelfTest();
+    expect(selfTestDiagnostics.lastSelfTest.status).toBe('passed');
+    expect(selfTestDiagnostics.lastSelfTest.healthOk).toBe(true);
+    expect(selfTestDiagnostics.lastSelfTest.initializeOk).toBe(true);
+    expect(selfTestDiagnostics.lastSelfTest.toolsListOk).toBe(true);
+
     await server.stop();
+  });
+
+  it('records a failed self-test when the server is offline', async () => {
+    const storageDir = await mkdtemp(path.join(os.tmpdir(), 'agent-browser-tool-server-'));
+    tempDirs.push(storageDir);
+
+    const server = new ToolServer({
+      runtime: {
+        listTabs: () => [],
+        executeNavigationCommand: async () => createEmptyNavigationState(),
+        executePickerCommand: async () => createEmptyPickerState(),
+        getPickerState: () => createEmptyPickerState(),
+        getMarkdownForCurrentPage: async () => createEmptyMarkdownViewState(),
+      },
+      storageDir,
+      port: 0,
+      logger: {
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+      },
+    });
+
+    const diagnostics = await server.runSelfTest();
+    expect(diagnostics.lastSelfTest.status).toBe('failed');
+    expect(diagnostics.lastSelfTest.summary).toContain('not listening');
   });
 });

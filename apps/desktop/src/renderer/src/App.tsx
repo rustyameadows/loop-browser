@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent, type JSX, type SVGProps } from 'react';
 import {
+  createEmptyMcpViewState,
   createEmptyMarkdownViewState,
   createEmptyNavigationState,
   createEmptyPickerState,
   type ElementDescriptor,
+  type McpViewCommand,
+  type McpViewState,
   type MarkdownViewCommand,
   type MarkdownViewState,
   type NavigationCommand,
@@ -15,9 +18,10 @@ import {
 const emptyState = createEmptyNavigationState();
 const emptyPickerState = createEmptyPickerState();
 const emptyMarkdownState = createEmptyMarkdownViewState();
+const emptyMcpState = createEmptyMcpViewState();
 const stubTabs = ['Agent Chat', 'Inspector'];
 
-type SurfaceMode = 'chrome' | 'markdown';
+type SurfaceMode = 'chrome' | 'markdown' | 'mcp';
 
 type IconName =
   | 'arrowUpRight'
@@ -36,7 +40,15 @@ type IconName =
 
 const getSurfaceMode = (): SurfaceMode => {
   const params = new URLSearchParams(window.location.search);
-  return params.get('surface') === 'markdown' ? 'markdown' : 'chrome';
+  if (params.get('surface') === 'markdown') {
+    return 'markdown';
+  }
+
+  if (params.get('surface') === 'mcp') {
+    return 'mcp';
+  }
+
+  return 'chrome';
 };
 
 const getActiveTabLabel = (state: NavigationState): string => {
@@ -124,6 +136,61 @@ const getMarkdownStatusText = (state: MarkdownViewState): string => {
     case 'idle':
     default:
       return 'Open this panel from the main chrome to convert the current page.';
+  }
+};
+
+const formatTimestamp = (value: string | null): string => {
+  if (!value) {
+    return 'Never';
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return parsed.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+};
+
+const getMcpSelfTestLabel = (state: McpViewState): string => {
+  switch (state.lastSelfTest.status) {
+    case 'running':
+      return 'Running MCP self-test...';
+    case 'passed':
+      return `Verified ${formatTimestamp(state.lastSelfTest.checkedAt)}`;
+    case 'failed':
+      return state.lastSelfTest.summary;
+    case 'idle':
+    default:
+      return 'Waiting for first verification.';
+  }
+};
+
+const getMcpAuthLabel = (state: McpViewState): string => {
+  if (!state.hasAuthToken) {
+    return `${state.authType} missing`;
+  }
+
+  return state.authTokenPreview
+    ? `${state.authType} configured | ${state.authTokenPreview}`
+    : `${state.authType} configured`;
+};
+
+const getMcpIndicatorLabel = (state: McpViewState): string => {
+  switch (state.indicator) {
+    case 'green':
+      return 'Verified';
+    case 'red':
+      return 'Error';
+    case 'yellow':
+    default:
+      return 'Checking';
   }
 };
 
@@ -390,10 +457,45 @@ const useMarkdownViewState = (): MarkdownViewState => {
   return markdownViewState;
 };
 
+const useMcpViewState = (): McpViewState => {
+  const [mcpViewState, setMcpViewState] = useState<McpViewState>(emptyMcpState);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const syncInitialMcpState = async (): Promise<void> => {
+      const initialState = await window.agentBrowser.getMcpViewState();
+      if (!isMounted) {
+        return;
+      }
+
+      setMcpViewState(initialState);
+    };
+
+    void syncInitialMcpState();
+
+    const unsubscribe = window.agentBrowser.subscribeMcpView((nextState) => {
+      if (!isMounted) {
+        return;
+      }
+
+      setMcpViewState(nextState);
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, []);
+
+  return mcpViewState;
+};
+
 const ChromeSurface = (): JSX.Element => {
   const navigationState = useNavigationState();
   const pickerState = usePickerState();
   const markdownViewState = useMarkdownViewState();
+  const mcpViewState = useMcpViewState();
   const [draftUrl, setDraftUrl] = useState('');
   const [isEditingAddress, setIsEditingAddress] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState('Copy JSON');
@@ -428,6 +530,10 @@ const ChromeSurface = (): JSX.Element => {
 
   const runMarkdownCommand = async (command: MarkdownViewCommand): Promise<void> => {
     await window.agentBrowser.executeMarkdownView(command);
+  };
+
+  const runMcpCommand = async (command: McpViewCommand): Promise<void> => {
+    await window.agentBrowser.executeMcpView(command);
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
@@ -598,9 +704,26 @@ const ChromeSurface = (): JSX.Element => {
               <ChromeIcon className="shell__icon" name="book" />
               <span>View as MD</span>
             </button>
-            <div aria-hidden="true" className="shell__toolbarStub">
-              <ChromeIcon className="shell__icon shell__icon--muted" name="sliders" />
-            </div>
+            <button
+              aria-label={`MCP status: ${mcpViewState.statusLabel}`}
+              aria-pressed={mcpViewState.isOpen}
+              className={`shell__pillButton shell__pillButton--mcp${
+                mcpViewState.isOpen ? ' shell__pillButton--mcpActive' : ''
+              }`}
+              onClick={() =>
+                void runMcpCommand({
+                  action: mcpViewState.isOpen ? 'close' : 'open',
+                })
+              }
+              title={mcpViewState.statusLabel}
+              type="button"
+            >
+              <span
+                aria-hidden="true"
+                className={`shell__statusDot shell__statusDot--${mcpViewState.indicator}`}
+              />
+              <span>MCP Status</span>
+            </button>
             <button aria-label="Load address" className="shell__goButton" type="submit">
               <ChromeIcon className="shell__icon" name="arrowUpRight" />
             </button>
@@ -751,5 +874,177 @@ const MarkdownSurface = (): JSX.Element => {
   );
 };
 
-export const App = (): JSX.Element =>
-  getSurfaceMode() === 'markdown' ? <MarkdownSurface /> : <ChromeSurface />;
+const McpSurface = (): JSX.Element => {
+  const mcpViewState = useMcpViewState();
+
+  const runMcpCommand = async (command: McpViewCommand): Promise<void> => {
+    await window.agentBrowser.executeMcpView(command);
+  };
+
+  return (
+    <main className="mcpSurface">
+      <section className="mcpSurface__panel">
+        <header className="mcpSurface__header">
+          <div className="mcpSurface__eyebrow">MCP Diagnostics</div>
+          <button
+            aria-label="Close MCP diagnostics"
+            className="mcpSurface__iconButton"
+            onClick={() => void runMcpCommand({ action: 'close' })}
+            type="button"
+          >
+            <ChromeIcon className="shell__icon" name="close" />
+          </button>
+        </header>
+
+        <section className="mcpSurface__hero">
+          <div className="mcpSurface__heroHeading">
+            <span
+              aria-hidden="true"
+              className={`shell__statusDot shell__statusDot--${mcpViewState.indicator}`}
+            />
+            <div>
+              <div className="mcpSurface__title">MCP Status</div>
+              <div className="mcpSurface__subtitle">{mcpViewState.statusLabel}</div>
+            </div>
+          </div>
+
+          <div className={`mcpSurface__badge mcpSurface__badge--${mcpViewState.indicator}`}>
+            {getMcpIndicatorLabel(mcpViewState)}
+          </div>
+        </section>
+
+        <div className="mcpSurface__actions">
+          <button
+            className="shell__pillButton shell__pillButton--muted"
+            onClick={() => void runMcpCommand({ action: 'refresh' })}
+            type="button"
+          >
+            Refresh Status
+          </button>
+          <button className="shell__pillButton" onClick={() => void runMcpCommand({ action: 'selfTest' })} type="button">
+            Run Self-Test
+          </button>
+          <button
+            className="shell__pillButton shell__pillButton--muted"
+            onClick={() => void runMcpCommand({ action: 'close' })}
+            type="button"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="mcpSurface__body">
+          <section className="mcpSurface__section">
+            <div className="mcpSurface__sectionTitle">Connection</div>
+            <dl className="mcpSurface__metaList">
+              <div className="mcpSurface__metaRow">
+                <dt>Transport</dt>
+                <dd>{mcpViewState.transportUrl || 'Waiting for server startup'}</dd>
+              </div>
+              <div className="mcpSurface__metaRow">
+                <dt>Host / Port</dt>
+                <dd>
+                  {mcpViewState.host || '127.0.0.1'}
+                  {mcpViewState.port ? `:${mcpViewState.port}` : ''}
+                </dd>
+              </div>
+              <div className="mcpSurface__metaRow">
+                <dt>Auth</dt>
+                <dd>{getMcpAuthLabel(mcpViewState)}</dd>
+              </div>
+              <div className="mcpSurface__metaRow">
+                <dt>Manifest</dt>
+                <dd>{mcpViewState.registrationFile || 'Waiting for registration file'}</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section className="mcpSurface__section">
+            <div className="mcpSurface__sectionHeader">
+              <div className="mcpSurface__sectionTitle">Tools</div>
+              <div className="mcpSurface__sectionMeta">{mcpViewState.tools.length} exposed</div>
+            </div>
+            <div className="mcpSurface__toolList">
+              {mcpViewState.tools.map((tool) => (
+                <span className="mcpSurface__toolPill" key={tool}>
+                  {tool}
+                </span>
+              ))}
+            </div>
+          </section>
+
+          <section className="mcpSurface__section">
+            <div className="mcpSurface__sectionHeader">
+              <div className="mcpSurface__sectionTitle">Activity</div>
+              <div className="mcpSurface__sectionMeta">
+                {mcpViewState.requestCount.toLocaleString()} requests handled
+              </div>
+            </div>
+            <div className="mcpSurface__activitySummary">
+              Last request: {formatTimestamp(mcpViewState.lastRequestAt)}
+            </div>
+            <div className="mcpSurface__requestList">
+              {mcpViewState.recentRequests.length > 0 ? (
+                mcpViewState.recentRequests.map((entry) => (
+                  <article className="mcpSurface__requestItem" key={`${entry.at}-${entry.method}-${entry.detail}`}>
+                    <div className="mcpSurface__requestHeader">
+                      <span className="mcpSurface__requestMethod">{entry.method}</span>
+                      <span className={`mcpSurface__requestOutcome mcpSurface__requestOutcome--${entry.outcome}`}>
+                        {entry.outcome}
+                      </span>
+                    </div>
+                    <div className="mcpSurface__requestDetail">{entry.detail}</div>
+                    <div className="mcpSurface__requestTime">{formatTimestamp(entry.at)}</div>
+                  </article>
+                ))
+              ) : (
+                <div className="mcpSurface__empty">No MCP requests have been recorded yet.</div>
+              )}
+            </div>
+          </section>
+
+          <section className="mcpSurface__section">
+            <div className="mcpSurface__sectionHeader">
+              <div className="mcpSurface__sectionTitle">Debug</div>
+              <div className="mcpSurface__sectionMeta">
+                Last checked {formatTimestamp(mcpViewState.lastSelfTest.checkedAt)}
+              </div>
+            </div>
+            <div className="mcpSurface__debugRow">{getMcpSelfTestLabel(mcpViewState)}</div>
+            <div className="mcpSurface__debugGrid">
+              <div className="mcpSurface__debugChip">
+                Health: {mcpViewState.lastSelfTest.healthOk === null ? 'Pending' : mcpViewState.lastSelfTest.healthOk ? 'OK' : 'Fail'}
+              </div>
+              <div className="mcpSurface__debugChip">
+                Initialize: {mcpViewState.lastSelfTest.initializeOk === null ? 'Pending' : mcpViewState.lastSelfTest.initializeOk ? 'OK' : 'Fail'}
+              </div>
+              <div className="mcpSurface__debugChip">
+                Tools: {mcpViewState.lastSelfTest.toolsListOk === null ? 'Pending' : mcpViewState.lastSelfTest.toolsListOk ? 'OK' : 'Fail'}
+              </div>
+            </div>
+            {mcpViewState.lastError ? (
+              <div className="mcpSurface__error">{mcpViewState.lastError}</div>
+            ) : null}
+            <div className="mcpSurface__activitySummary">
+              Updated {formatTimestamp(mcpViewState.lastUpdatedAt)}
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+  );
+};
+
+export const App = (): JSX.Element => {
+  const surfaceMode = getSurfaceMode();
+
+  if (surfaceMode === 'markdown') {
+    return <MarkdownSurface />;
+  }
+
+  if (surfaceMode === 'mcp') {
+    return <McpSurface />;
+  }
+
+  return <ChromeSurface />;
+};

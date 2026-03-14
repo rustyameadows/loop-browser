@@ -10,6 +10,9 @@ import {
   shell,
 } from 'electron';
 import {
+  MCP_VIEW_COMMAND_CHANNEL,
+  MCP_VIEW_GET_STATE_CHANNEL,
+  MCP_VIEW_STATE_CHANNEL,
   MARKDOWN_VIEW_COMMAND_CHANNEL,
   MARKDOWN_VIEW_GET_STATE_CHANNEL,
   MARKDOWN_VIEW_STATE_CHANNEL,
@@ -21,13 +24,17 @@ import {
   PICKER_COMMAND_CHANNEL,
   PICKER_GET_STATE_CHANNEL,
   PICKER_STATE_CHANNEL,
+  createEmptyMcpViewState,
   createEmptyMarkdownViewState,
   createEmptyNavigationState,
   createEmptyPickerState,
+  isMcpViewCommand,
   isMarkdownViewCommand,
   isNavigationCommand,
   isPagePickerEvent,
   isPickerCommand,
+  type McpViewCommand,
+  type McpViewState,
   type MarkdownViewCommand,
   type MarkdownViewState,
   type NavigationCommand,
@@ -36,6 +43,7 @@ import {
   type PickerState,
 } from '@agent-browser/protocol';
 import { extractMarkdownFromHtml } from './markdown';
+import { mapDiagnosticsToMcpViewState, type McpDiagnosticsSource } from './mcp-view';
 import { fixtureFileUrl, isSafeExternalUrl, normalizeAddress } from './url';
 
 const CHROME_HEIGHT = 152;
@@ -44,7 +52,9 @@ const MARKDOWN_BREAKPOINT = 1100;
 
 export const PRIMARY_TAB_ID = 'tab-1';
 
-type TrustedSurface = 'chrome' | 'markdown';
+type TrustedSurface = 'chrome' | 'markdown' | 'mcp';
+
+type SidePanelKind = 'markdown' | 'mcp';
 
 type PageMarkupSnapshot = {
   html: string;
@@ -68,11 +78,16 @@ export class BrowserShell {
   private uiView: WebContentsView | null = null;
   private pageView: WebContentsView | null = null;
   private markdownPanelView: WebContentsView | null = null;
+  private mcpPanelView: WebContentsView | null = null;
   private markdownPanelMounted = false;
+  private mcpPanelMounted = false;
   private lastError: string | null = null;
   private pickerState: PickerState = createEmptyPickerState();
   private markdownViewState: MarkdownViewState = createEmptyMarkdownViewState();
+  private mcpViewState: McpViewState = createEmptyMcpViewState();
   private markdownRequestId = 0;
+  private mcpDiagnosticsSource: McpDiagnosticsSource | null = null;
+  private mcpDiagnosticsUnsubscribe: (() => void) | null = null;
 
   constructor(private readonly options: BrowserShellOptions = {}) {
     this.registerIpcHandlers();
@@ -121,7 +136,11 @@ export class BrowserShell {
     ipcMain.removeHandler(PICKER_GET_STATE_CHANNEL);
     ipcMain.removeHandler(MARKDOWN_VIEW_COMMAND_CHANNEL);
     ipcMain.removeHandler(MARKDOWN_VIEW_GET_STATE_CHANNEL);
+    ipcMain.removeHandler(MCP_VIEW_COMMAND_CHANNEL);
+    ipcMain.removeHandler(MCP_VIEW_GET_STATE_CHANNEL);
     ipcMain.removeAllListeners(PAGE_PICKER_EVENT_CHANNEL);
+    this.mcpDiagnosticsUnsubscribe?.();
+    this.mcpDiagnosticsUnsubscribe = null;
     this.destroyWindow();
   }
 
@@ -154,6 +173,10 @@ export class BrowserShell {
     void this.executeMarkdownViewCommand({ action: 'toggle' });
   }
 
+  toggleMcpView(): void {
+    void this.executeMcpViewCommand({ action: 'toggle' });
+  }
+
   listTabs(): BrowserTabSnapshot[] {
     const navigationState = this.createNavigationState();
 
@@ -180,6 +203,25 @@ export class BrowserShell {
 
   getMarkdownViewState(): MarkdownViewState {
     return { ...this.markdownViewState };
+  }
+
+  getMcpViewState(): McpViewState {
+    return {
+      ...this.mcpViewState,
+      tools: [...this.mcpViewState.tools],
+      recentRequests: this.mcpViewState.recentRequests.map((entry) => ({ ...entry })),
+      lastSelfTest: { ...this.mcpViewState.lastSelfTest },
+    };
+  }
+
+  attachMcpDiagnostics(source: McpDiagnosticsSource): void {
+    this.mcpDiagnosticsUnsubscribe?.();
+    this.mcpDiagnosticsSource = source;
+    this.syncMcpViewState();
+    this.mcpDiagnosticsUnsubscribe = source.subscribe((snapshot) => {
+      this.mcpViewState = mapDiagnosticsToMcpViewState(snapshot, this.mcpViewState.isOpen);
+      this.sendMcpViewState();
+    });
   }
 
   async executeNavigationCommand(command: NavigationCommand): Promise<NavigationState> {
@@ -245,6 +287,33 @@ export class BrowserShell {
     return this.refreshMarkdownView(forceRefresh);
   }
 
+  async executeMcpViewCommand(command: McpViewCommand): Promise<McpViewState> {
+    switch (command.action) {
+      case 'open':
+        return this.openMcpPanel();
+      case 'close':
+        return this.closeMcpPanel();
+      case 'toggle':
+        return this.mcpViewState.isOpen ? this.closeMcpPanel() : this.openMcpPanel();
+      case 'refresh':
+        this.syncMcpViewState();
+        return this.getMcpViewState();
+      case 'selfTest':
+        if (!this.mcpDiagnosticsSource) {
+          return this.getMcpViewState();
+        }
+
+        {
+          const diagnostics = await this.mcpDiagnosticsSource.runSelfTest();
+          this.mcpViewState = mapDiagnosticsToMcpViewState(diagnostics, this.mcpViewState.isOpen);
+          this.sendMcpViewState();
+          return this.getMcpViewState();
+        }
+      default:
+        return this.getMcpViewState();
+    }
+  }
+
   private registerIpcHandlers(): void {
     ipcMain.removeHandler(NAVIGATION_COMMAND_CHANNEL);
     ipcMain.removeHandler(NAVIGATION_GET_STATE_CHANNEL);
@@ -252,6 +321,8 @@ export class BrowserShell {
     ipcMain.removeHandler(PICKER_GET_STATE_CHANNEL);
     ipcMain.removeHandler(MARKDOWN_VIEW_COMMAND_CHANNEL);
     ipcMain.removeHandler(MARKDOWN_VIEW_GET_STATE_CHANNEL);
+    ipcMain.removeHandler(MCP_VIEW_COMMAND_CHANNEL);
+    ipcMain.removeHandler(MCP_VIEW_GET_STATE_CHANNEL);
     ipcMain.removeAllListeners(PAGE_PICKER_EVENT_CHANNEL);
 
     ipcMain.handle(
@@ -317,6 +388,24 @@ export class BrowserShell {
       },
     );
 
+    ipcMain.handle(
+      MCP_VIEW_COMMAND_CHANNEL,
+      async (event: IpcMainInvokeEvent, payload: unknown): Promise<McpViewState> => {
+        this.assertTrustedSender(event);
+
+        if (!isMcpViewCommand(payload)) {
+          throw new Error('Invalid MCP view command payload.');
+        }
+
+        return this.executeMcpViewCommand(payload);
+      },
+    );
+
+    ipcMain.handle(MCP_VIEW_GET_STATE_CHANNEL, async (event: IpcMainInvokeEvent) => {
+      this.assertTrustedSender(event);
+      return this.getMcpViewState();
+    });
+
     ipcMain.on(PAGE_PICKER_EVENT_CHANNEL, (event: IpcMainEvent, payload: unknown) => {
       if (!this.pageView || event.sender.id !== this.pageView.webContents.id) {
         return;
@@ -352,6 +441,7 @@ export class BrowserShell {
     const trustedIds = [
       this.uiView?.webContents.id,
       this.markdownPanelView?.webContents.id,
+      this.mcpPanelView?.webContents.id,
     ].filter((value): value is number => typeof value === 'number');
 
     if (!trustedIds.includes(event.sender.id)) {
@@ -455,6 +545,7 @@ export class BrowserShell {
       this.sendNavigationState();
       this.sendPickerState();
       this.sendMarkdownViewState();
+      this.sendMcpViewState();
     });
 
     this.loadTrustedSurface(view, surface);
@@ -496,6 +587,13 @@ export class BrowserShell {
 
     const [width, height] = this.window.getContentSize();
     const contentHeight = Math.max(height - CHROME_HEIGHT, 0);
+    const activeSidePanel = this.getActiveSidePanel();
+    const activeSidePanelView =
+      activeSidePanel === 'markdown'
+        ? this.markdownPanelView
+        : activeSidePanel === 'mcp'
+          ? this.mcpPanelView
+          : null;
 
     this.uiView.setBounds({
       x: 0,
@@ -504,7 +602,7 @@ export class BrowserShell {
       height: CHROME_HEIGHT,
     });
 
-    if (this.markdownViewState.isOpen && this.markdownPanelView && this.markdownPanelMounted) {
+    if (activeSidePanelView) {
       if (width < MARKDOWN_BREAKPOINT) {
         this.pageView.setBounds({
           x: 0,
@@ -512,7 +610,7 @@ export class BrowserShell {
           width: 0,
           height: 0,
         });
-        this.markdownPanelView.setBounds({
+        activeSidePanelView.setBounds({
           x: 0,
           y: CHROME_HEIGHT,
           width,
@@ -529,7 +627,7 @@ export class BrowserShell {
         width: pageWidth,
         height: contentHeight,
       });
-      this.markdownPanelView.setBounds({
+      activeSidePanelView.setBounds({
         x: pageWidth,
         y: CHROME_HEIGHT,
         width: panelWidth,
@@ -545,8 +643,12 @@ export class BrowserShell {
       height: contentHeight,
     });
 
-    if (this.markdownPanelView) {
-      this.markdownPanelView.setBounds({
+    for (const panelView of [this.markdownPanelView, this.mcpPanelView]) {
+      if (!panelView) {
+        continue;
+      }
+
+      panelView.setBounds({
         x: width,
         y: CHROME_HEIGHT,
         width: 0,
@@ -605,6 +707,7 @@ export class BrowserShell {
   }
 
   private async openMarkdownPanel(): Promise<MarkdownViewState> {
+    this.closeMcpPanel();
     this.ensureMarkdownPanelMounted();
 
     this.markdownViewState = {
@@ -619,7 +722,7 @@ export class BrowserShell {
     return this.refreshMarkdownView(false);
   }
 
-  private closeMarkdownPanel(): MarkdownViewState {
+  private closeMarkdownPanel(notify = true): MarkdownViewState {
     if (this.window && this.markdownPanelView && this.markdownPanelMounted) {
       this.window.contentView.removeChildView(this.markdownPanelView);
       this.markdownPanelMounted = false;
@@ -630,7 +733,9 @@ export class BrowserShell {
       isOpen: false,
     };
     this.layoutViews();
-    this.sendMarkdownViewState();
+    if (notify) {
+      this.sendMarkdownViewState();
+    }
     return this.getMarkdownViewState();
   }
 
@@ -646,6 +751,51 @@ export class BrowserShell {
     if (!this.markdownPanelMounted) {
       this.window.contentView.addChildView(this.markdownPanelView);
       this.markdownPanelMounted = true;
+    }
+  }
+
+  private openMcpPanel(): McpViewState {
+    this.closeMarkdownPanel();
+    this.ensureMcpPanelMounted();
+    this.syncMcpViewState(false);
+    this.mcpViewState = {
+      ...this.mcpViewState,
+      isOpen: true,
+    };
+    this.layoutViews();
+    this.sendMcpViewState();
+    return this.getMcpViewState();
+  }
+
+  private closeMcpPanel(notify = true): McpViewState {
+    if (this.window && this.mcpPanelView && this.mcpPanelMounted) {
+      this.window.contentView.removeChildView(this.mcpPanelView);
+      this.mcpPanelMounted = false;
+    }
+
+    this.mcpViewState = {
+      ...this.mcpViewState,
+      isOpen: false,
+    };
+    this.layoutViews();
+    if (notify) {
+      this.sendMcpViewState();
+    }
+    return this.getMcpViewState();
+  }
+
+  private ensureMcpPanelMounted(): void {
+    if (!this.window) {
+      throw new Error('Window is not ready.');
+    }
+
+    if (!this.mcpPanelView) {
+      this.mcpPanelView = this.createTrustedView('mcp');
+    }
+
+    if (!this.mcpPanelMounted) {
+      this.window.contentView.addChildView(this.mcpPanelView);
+      this.mcpPanelMounted = true;
     }
   }
 
@@ -752,6 +902,18 @@ export class BrowserShell {
     return snapshot;
   }
 
+  private getActiveSidePanel(): SidePanelKind | null {
+    if (this.mcpViewState.isOpen && this.mcpPanelView && this.mcpPanelMounted) {
+      return 'mcp';
+    }
+
+    if (this.markdownViewState.isOpen && this.markdownPanelView && this.markdownPanelMounted) {
+      return 'markdown';
+    }
+
+    return null;
+  }
+
   private createNavigationState(): NavigationState {
     if (!this.pageView) {
       return createEmptyNavigationState();
@@ -814,6 +976,20 @@ export class BrowserShell {
     this.sendMarkdownViewState();
   }
 
+  private syncMcpViewState(notify = true): void {
+    if (!this.mcpDiagnosticsSource) {
+      return;
+    }
+
+    this.mcpViewState = mapDiagnosticsToMcpViewState(
+      this.mcpDiagnosticsSource.getDiagnostics(),
+      this.mcpViewState.isOpen,
+    );
+    if (notify) {
+      this.sendMcpViewState();
+    }
+  }
+
   private sendNavigationState(): void {
     this.sendToTrustedViews(NAVIGATION_STATE_CHANNEL, this.createNavigationState());
   }
@@ -826,8 +1002,12 @@ export class BrowserShell {
     this.sendToTrustedViews(MARKDOWN_VIEW_STATE_CHANNEL, this.getMarkdownViewState());
   }
 
+  private sendMcpViewState(): void {
+    this.sendToTrustedViews(MCP_VIEW_STATE_CHANNEL, this.getMcpViewState());
+  }
+
   private sendToTrustedViews(channel: string, payload: unknown): void {
-    for (const view of [this.uiView, this.markdownPanelView]) {
+    for (const view of [this.uiView, this.markdownPanelView, this.mcpPanelView]) {
       if (!view || view.webContents.isDestroyed()) {
         continue;
       }
@@ -837,12 +1017,15 @@ export class BrowserShell {
   }
 
   private destroyWindow(): void {
+    this.closeManagedView(this.mcpPanelView);
     this.closeManagedView(this.markdownPanelView);
     this.closeManagedView(this.pageView);
     this.closeManagedView(this.uiView);
+    this.mcpPanelView = null;
     this.markdownPanelView = null;
     this.pageView = null;
     this.uiView = null;
+    this.mcpPanelMounted = false;
     this.markdownPanelMounted = false;
     this.window = null;
   }
