@@ -59,6 +59,10 @@ export interface BrowserTabSnapshot {
   isLoading: boolean;
 }
 
+interface BrowserShellOptions {
+  initialUrl?: string;
+}
+
 export class BrowserShell {
   private window: BaseWindow | null = null;
   private uiView: WebContentsView | null = null;
@@ -70,7 +74,7 @@ export class BrowserShell {
   private markdownViewState: MarkdownViewState = createEmptyMarkdownViewState();
   private markdownRequestId = 0;
 
-  constructor() {
+  constructor(private readonly options: BrowserShellOptions = {}) {
     this.registerIpcHandlers();
   }
 
@@ -474,13 +478,15 @@ export class BrowserShell {
   }
 
   private async loadInitialPage(): Promise<void> {
-    await this.navigateTo(
+    const initialUrl =
+      this.options.initialUrl ??
       fixtureFileUrl({
         appPath: app.getAppPath(),
         isPackaged: app.isPackaged,
         resourcesPath: process.resourcesPath,
-      }),
-    );
+      });
+
+    await this.navigateTo(normalizeAddress(initialUrl));
   }
 
   private layoutViews(): void {

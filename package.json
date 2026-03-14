@@ -14,6 +14,9 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p packages/protocol/tsconfig.json && tsc --noEmit -p packages/selector/tsconfig.json && tsc --noEmit -p apps/desktop/tsconfig.json",
     "test": "vitest run",
+    "smoke:mcp:dev": "node scripts/mcp-smoke.mjs dev",
+    "smoke:mcp:packaged": "node scripts/mcp-smoke.mjs packaged",
+    "smoke:mcp": "npm run build && npm run smoke:mcp:dev && npm run smoke:mcp:packaged",
     "build": "npm run build --workspace @agent-browser/desktop",
     "package:mac": "npm run make:mac --workspace @agent-browser/desktop"
   },

@@ -10,6 +10,7 @@ import type {
   PickerCommand,
   PickerState,
 } from '@agent-browser/protocol';
+import { DEFAULT_TOOL_SERVER_PORT } from './runtime-config';
 
 type JsonRpcId = string | number | null;
 
@@ -188,7 +189,7 @@ export class ToolServer {
     this.runtime = options.runtime;
     this.storageDir = options.storageDir;
     this.host = options.host ?? '127.0.0.1';
-    this.port = options.port ?? 46255;
+    this.port = options.port ?? DEFAULT_TOOL_SERVER_PORT;
     this.logger = options.logger ?? console;
   }
 

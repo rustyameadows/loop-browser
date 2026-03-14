@@ -1,14 +1,24 @@
 import { app } from 'electron';
 import { BrowserShell } from './browser-shell';
 import { installAppMenu } from './menu';
+import { resolveRuntimeConfig } from './runtime-config';
 import { ToolServer } from './tool-server';
 
 app.setName('Agent Browser');
 
-const browserShell = new BrowserShell();
+const runtimeConfig = resolveRuntimeConfig(process.env);
+
+if (runtimeConfig.userDataDir) {
+  app.setPath('userData', runtimeConfig.userDataDir);
+}
+
+const browserShell = new BrowserShell({
+  initialUrl: runtimeConfig.startUrl ?? undefined,
+});
 const toolServer = new ToolServer({
   runtime: browserShell,
   storageDir: app.getPath('userData'),
+  port: runtimeConfig.toolServerPort,
 });
 installAppMenu(browserShell);
 

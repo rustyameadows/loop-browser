@@ -45,6 +45,12 @@ jobs:
       - name: Build unpackaged app
         run: npm run build
 
+      - name: Smoke MCP against dev runtime
+        run: npm run smoke:mcp:dev
+
+      - name: Smoke MCP against packaged runtime
+        run: npm run smoke:mcp:packaged
+
       - name: Package macOS artifact
         run: npm run package:mac
 
