@@ -11,11 +11,19 @@ vi.mock('electron', () => ({
     getAppPath: () => '/tmp/app',
     isPackaged: false,
   },
+  desktopCapturer: {
+    getSources: vi.fn(async () => []),
+  },
   ipcMain: {
     removeHandler: vi.fn(),
     handle: vi.fn(),
     removeAllListeners: vi.fn(),
     on: vi.fn(),
+  },
+  screen: {
+    getDisplayMatching: () => ({
+      scaleFactor: 2,
+    }),
   },
   shell: {
     openExternal: vi.fn(),

@@ -4,6 +4,7 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import type {
+  ArtifactRecord,
   McpRecentRequest,
   McpRequestOutcome,
   McpSelfTestSummary,
@@ -12,7 +13,14 @@ import type {
   NavigationState,
   PickerCommand,
   PickerState,
+  ResizeWindowRequest,
+  ScreenshotArtifact,
+  ScreenshotRequest,
+  WindowState,
 } from '@agent-browser/protocol';
+import { isResizeWindowRequest, isScreenshotRequest } from '@agent-browser/protocol';
+import { ArtifactStore } from './artifact-store';
+import type { BrowserScreenshotCapture } from './browser-shell';
 import { DEFAULT_TOOL_SERVER_PORT } from './runtime-config';
 
 type JsonRpcId = string | number | null;
@@ -52,6 +60,9 @@ export interface ToolServerRuntime {
   executePickerCommand(command: PickerCommand): Promise<PickerState>;
   getPickerState(): PickerState;
   getMarkdownForCurrentPage(forceRefresh?: boolean): Promise<MarkdownViewState>;
+  getWindowState(): WindowState;
+  resizeWindow(request: ResizeWindowRequest): Promise<WindowState>;
+  captureScreenshot(request: ScreenshotRequest): Promise<BrowserScreenshotCapture>;
 }
 
 export interface ToolServerConnectionInfo {
@@ -146,6 +157,87 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'page.screenshot',
+    description: 'Capture a screenshot of the page, an element, or the full app window.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          enum: ['page', 'element', 'window'],
+        },
+        selector: { type: 'string' },
+        format: {
+          type: 'string',
+          enum: ['png', 'jpeg'],
+        },
+        quality: { type: 'number' },
+        fileNameHint: { type: 'string' },
+      },
+      required: ['target'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'browser.getWindowState',
+    description: 'Inspect the current window, content, and page viewport bounds.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'browser.resizeWindow',
+    description: 'Resize the app window, content area, or page viewport.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        width: { type: 'number' },
+        height: { type: 'number' },
+        target: {
+          type: 'string',
+          enum: ['window', 'content', 'pageViewport'],
+        },
+      },
+      required: ['width', 'height'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'artifacts.get',
+    description: 'Return metadata and local file path for a saved artifact.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        artifactId: { type: 'string' },
+      },
+      required: ['artifactId'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'artifacts.list',
+    description: 'List saved screenshot artifacts.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'artifacts.delete',
+    description: 'Delete a saved screenshot artifact.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        artifactId: { type: 'string' },
+      },
+      required: ['artifactId'],
+      additionalProperties: false,
+    },
+  },
 ];
 
 const EMPTY_SELF_TEST: McpSelfTestSummary = {
@@ -229,6 +321,7 @@ export class ToolServer {
   private readonly host: string;
   private readonly port: number;
   private readonly logger: Pick<Console, 'error' | 'info' | 'warn'>;
+  private readonly artifactStore: ArtifactStore;
   private readonly diagnosticsListeners = new Set<
     (snapshot: ToolServerDiagnosticsSnapshot) => void
   >();
@@ -248,6 +341,7 @@ export class ToolServer {
     this.host = options.host ?? '127.0.0.1';
     this.port = options.port ?? DEFAULT_TOOL_SERVER_PORT;
     this.logger = options.logger ?? console;
+    this.artifactStore = new ArtifactStore(this.storageDir);
     this.diagnostics = {
       lifecycle: 'starting',
       url: null,
@@ -271,6 +365,7 @@ export class ToolServer {
     }
 
     await fs.mkdir(this.storageDir, { recursive: true });
+    await this.artifactStore.ensureReady();
 
     const token = await this.loadOrCreateToken();
     const registrationFile = path.join(this.storageDir, 'mcp-registration.json');
@@ -719,9 +814,78 @@ export class ToolServer {
           wordCount: markdownView.wordCount,
         });
       }
+      case 'page.screenshot': {
+        if (!isScreenshotRequest(args)) {
+          throw new Error('page.screenshot requires a valid screenshot request.');
+        }
+
+        const capture = await this.runtime.captureScreenshot(args);
+        const artifact = await this.saveScreenshotArtifact(capture);
+        return toolResult(artifact);
+      }
+      case 'browser.getWindowState':
+        return toolResult({
+          window: this.runtime.getWindowState(),
+        });
+      case 'browser.resizeWindow': {
+        if (!isResizeWindowRequest(args)) {
+          throw new Error('browser.resizeWindow requires numeric width and height.');
+        }
+
+        return toolResult({
+          window: await this.runtime.resizeWindow(args),
+        });
+      }
+      case 'artifacts.get':
+        return toolResult({
+          artifact: await this.getArtifact(args),
+        });
+      case 'artifacts.list':
+        return toolResult({
+          artifacts: await this.artifactStore.listArtifacts(),
+        });
+      case 'artifacts.delete':
+        return toolResult({
+          artifact: await this.deleteArtifact(args),
+        });
       default:
         throw new Error(`Unknown tool: ${params.name}`);
     }
+  }
+
+  private async saveScreenshotArtifact(
+    capture: BrowserScreenshotCapture,
+  ): Promise<ScreenshotArtifact> {
+    return this.artifactStore.saveScreenshot({
+      buffer: capture.data,
+      format: capture.format,
+      target: capture.target,
+      pixelWidth: capture.pixelWidth,
+      pixelHeight: capture.pixelHeight,
+      fileNameHint: capture.fileNameHint,
+    });
+  }
+
+  private async getArtifact(args: Record<string, unknown>): Promise<ArtifactRecord> {
+    if (typeof args.artifactId !== 'string' || args.artifactId.trim().length === 0) {
+      throw new Error('artifacts.get requires a non-empty artifactId.');
+    }
+
+    return this.artifactStore.getArtifact(args.artifactId);
+  }
+
+  private async deleteArtifact(
+    args: Record<string, unknown>,
+  ): Promise<{ artifactId: string; deleted: true }> {
+    if (typeof args.artifactId !== 'string' || args.artifactId.trim().length === 0) {
+      throw new Error('artifacts.delete requires a non-empty artifactId.');
+    }
+
+    await this.artifactStore.deleteArtifact(args.artifactId);
+    return {
+      artifactId: args.artifactId,
+      deleted: true,
+    };
   }
 
   private isAuthorized(request: IncomingMessage, token: string): boolean {

@@ -7,11 +7,17 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const EXPECTED_TOOLS = [
   'browser.listTabs',
+  'browser.getWindowState',
+  'browser.resizeWindow',
   'page.navigate',
   'picker.enable',
   'picker.disable',
   'picker.lastSelection',
   'page.viewAsMarkdown',
+  'page.screenshot',
+  'artifacts.get',
+  'artifacts.list',
+  'artifacts.delete',
 ]
 
 const LOG_LIMIT = 20_000
@@ -106,6 +112,14 @@ const requestJson = async (url, init) => {
     status: response.status,
     body: json,
     text,
+  }
+}
+
+const assertFileExists = async (filePath, message) => {
+  try {
+    await access(filePath)
+  } catch {
+    throw new Error(message)
   }
 }
 
@@ -444,6 +458,216 @@ const run = async () => {
       'page.viewAsMarkdown did not contain the expected fixture Markdown.',
     )
 
+    const windowState = await makeRpcRequest(
+      registration,
+      'tools/call',
+      {
+        name: 'browser.getWindowState',
+        arguments: {},
+      },
+      6,
+    )
+    state.requests.push({
+      name: 'tools/call:browser.getWindowState',
+      status: windowState.status,
+      body: windowState.body,
+    })
+    assert(windowState.status === 200, 'browser.getWindowState should return 200.')
+    assert(
+      typeof windowState.body?.result?.structuredContent?.window?.chromeHeight === 'number',
+      'browser.getWindowState did not return a valid window payload.',
+    )
+
+    const resized = await makeRpcRequest(
+      registration,
+      'tools/call',
+      {
+        name: 'browser.resizeWindow',
+        arguments: {
+          width: 1280,
+          height: 720,
+          target: 'pageViewport',
+        },
+      },
+      7,
+    )
+    state.requests.push({
+      name: 'tools/call:browser.resizeWindow',
+      status: resized.status,
+      body: resized.body,
+    })
+    assert(resized.status === 200, 'browser.resizeWindow should return 200.')
+    assert(
+      resized.body?.result?.structuredContent?.window?.pageViewportBounds?.width === 1280,
+      'browser.resizeWindow did not apply the requested viewport width.',
+    )
+    assert(
+      resized.body?.result?.structuredContent?.window?.pageViewportBounds?.height === 720,
+      'browser.resizeWindow did not apply the requested viewport height.',
+    )
+
+    const pageScreenshot = await makeRpcRequest(
+      registration,
+      'tools/call',
+      {
+        name: 'page.screenshot',
+        arguments: {
+          target: 'page',
+          fileNameHint: 'fixture-page',
+        },
+      },
+      8,
+    )
+    state.requests.push({
+      name: 'tools/call:page.screenshot:page',
+      status: pageScreenshot.status,
+      body: pageScreenshot.body,
+    })
+    assert(pageScreenshot.status === 200, 'page.screenshot(page) should return 200.')
+    const pageArtifact = pageScreenshot.body?.result?.structuredContent
+    assert(typeof pageArtifact?.artifactId === 'string', 'page.screenshot(page) did not return an artifact id.')
+    assert(pageArtifact.target === 'page', 'page.screenshot(page) returned the wrong target.')
+    assert(pageArtifact.pixelWidth >= 1280, 'page.screenshot(page) did not honor the resized viewport width.')
+    assert(pageArtifact.pixelHeight >= 720, 'page.screenshot(page) did not honor the resized viewport height.')
+
+    const elementScreenshot = await makeRpcRequest(
+      registration,
+      'tools/call',
+      {
+        name: 'page.screenshot',
+        arguments: {
+          target: 'element',
+          selector: '.card',
+          fileNameHint: 'fixture-card',
+        },
+      },
+      9,
+    )
+    state.requests.push({
+      name: 'tools/call:page.screenshot:element',
+      status: elementScreenshot.status,
+      body: elementScreenshot.body,
+    })
+    assert(elementScreenshot.status === 200, 'page.screenshot(element) should return 200.')
+    const elementArtifact = elementScreenshot.body?.result?.structuredContent
+    assert(typeof elementArtifact?.artifactId === 'string', 'page.screenshot(element) did not return an artifact id.')
+    assert(elementArtifact.target === 'element', 'page.screenshot(element) returned the wrong target.')
+    assert(elementArtifact.pixelWidth > 0, 'page.screenshot(element) returned an invalid width.')
+    assert(elementArtifact.pixelHeight > 0, 'page.screenshot(element) returned an invalid height.')
+
+    const windowScreenshot = await makeRpcRequest(
+      registration,
+      'tools/call',
+      {
+        name: 'page.screenshot',
+        arguments: {
+          target: 'window',
+          fileNameHint: 'fixture-window',
+        },
+      },
+      10,
+    )
+    state.requests.push({
+      name: 'tools/call:page.screenshot:window',
+      status: windowScreenshot.status,
+      body: windowScreenshot.body,
+    })
+    assert(windowScreenshot.status === 200, 'page.screenshot(window) should return 200.')
+    const windowArtifact = windowScreenshot.body?.result?.structuredContent
+    assert(typeof windowArtifact?.artifactId === 'string', 'page.screenshot(window) did not return an artifact id.')
+    assert(windowArtifact.target === 'window', 'page.screenshot(window) returned the wrong target.')
+
+    const pageArtifactRecord = await makeRpcRequest(
+      registration,
+      'tools/call',
+      {
+        name: 'artifacts.get',
+        arguments: {
+          artifactId: pageArtifact.artifactId,
+        },
+      },
+      11,
+    )
+    state.requests.push({
+      name: 'tools/call:artifacts.get:page',
+      status: pageArtifactRecord.status,
+      body: pageArtifactRecord.body,
+    })
+    assert(pageArtifactRecord.status === 200, 'artifacts.get(page) should return 200.')
+    const pageArtifactFile = pageArtifactRecord.body?.result?.structuredContent?.artifact?.filePath
+    assert(typeof pageArtifactFile === 'string', 'artifacts.get(page) did not return a file path.')
+    await assertFileExists(pageArtifactFile, 'artifacts.get(page) returned a missing file path.')
+
+    const windowArtifactRecord = await makeRpcRequest(
+      registration,
+      'tools/call',
+      {
+        name: 'artifacts.get',
+        arguments: {
+          artifactId: windowArtifact.artifactId,
+        },
+      },
+      12,
+    )
+    state.requests.push({
+      name: 'tools/call:artifacts.get:window',
+      status: windowArtifactRecord.status,
+      body: windowArtifactRecord.body,
+    })
+    assert(windowArtifactRecord.status === 200, 'artifacts.get(window) should return 200.')
+    const windowArtifactFile = windowArtifactRecord.body?.result?.structuredContent?.artifact?.filePath
+    assert(typeof windowArtifactFile === 'string', 'artifacts.get(window) did not return a file path.')
+    await assertFileExists(windowArtifactFile, 'artifacts.get(window) returned a missing file path.')
+
+    const listedArtifacts = await makeRpcRequest(
+      registration,
+      'tools/call',
+      {
+        name: 'artifacts.list',
+        arguments: {},
+      },
+      13,
+    )
+    state.requests.push({
+      name: 'tools/call:artifacts.list',
+      status: listedArtifacts.status,
+      body: listedArtifacts.body,
+    })
+    assert(listedArtifacts.status === 200, 'artifacts.list should return 200.')
+    const artifactIds =
+      listedArtifacts.body?.result?.structuredContent?.artifacts?.map((artifact) => artifact.artifactId) ?? []
+    assert(artifactIds.includes(pageArtifact.artifactId), 'artifacts.list did not include the page screenshot artifact.')
+    assert(
+      artifactIds.includes(elementArtifact.artifactId),
+      'artifacts.list did not include the element screenshot artifact.',
+    )
+    assert(
+      artifactIds.includes(windowArtifact.artifactId),
+      'artifacts.list did not include the window screenshot artifact.',
+    )
+
+    const deleteArtifact = await makeRpcRequest(
+      registration,
+      'tools/call',
+      {
+        name: 'artifacts.delete',
+        arguments: {
+          artifactId: elementArtifact.artifactId,
+        },
+      },
+      14,
+    )
+    state.requests.push({
+      name: 'tools/call:artifacts.delete',
+      status: deleteArtifact.status,
+      body: deleteArtifact.body,
+    })
+    assert(deleteArtifact.status === 200, 'artifacts.delete should return 200.')
+    assert(
+      deleteArtifact.body?.result?.structuredContent?.artifact?.deleted === true,
+      'artifacts.delete did not confirm deletion.',
+    )
+
     console.log(
       JSON.stringify(
         {
@@ -452,6 +676,11 @@ const run = async () => {
           verifiedTools: toolNames,
           navigatedUrl: fixtureUrl,
           markdownTitle: markdown.body.result.structuredContent.title,
+          artifactIds: {
+            page: pageArtifact.artifactId,
+            element: elementArtifact.artifactId,
+            window: windowArtifact.artifactId,
+          },
         },
         null,
         2,
