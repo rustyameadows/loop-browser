@@ -8,6 +8,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@agent-browser/protocol': path.resolve(rootDir, 'packages/protocol/src/index.ts'),
+      '@agent-browser/selector': path.resolve(rootDir, 'packages/selector/src/index.ts'),
     },
   },
   test: {

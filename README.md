@@ -6,6 +6,7 @@ Agent Browser is the bootstrap monorepo for the macOS Electron browser shell des
 
 - `apps/desktop`: Electron main process, trusted React chrome, and the embedded page view.
 - `packages/protocol`: shared navigation command and navigation state types plus guard helpers.
+- `packages/selector`: element descriptor normalization and selector generation for DOM pick mode.
 
 ## Local Setup
 
@@ -16,6 +17,10 @@ Agent Browser is the bootstrap monorepo for the macOS Electron browser shell des
 5. Produce a macOS zip artifact locally with `npm run package:mac`.
 
 The desktop shell opens a checked-in `file://` fixture on first launch. Replace the address with any `https://`, `http://`, or `file://` target to exercise the page view. In-app popups are denied; plain `http/https` popup attempts are opened externally.
+
+The chrome also includes a DOM pick mode. Use the crosshair button or `View > Toggle Pick Mode`, then click any page element to capture a structured descriptor. The selected descriptor stays in the trusted chrome until you clear it, and the JSON can be copied directly from the inspector strip.
+
+While the app is running, the main process also starts a localhost JSON-RPC tool server at `127.0.0.1`. The current registration manifest is written to `~/Library/Application Support/Agent Browser/mcp-registration.json` on macOS and includes the URL plus bearer token header needed by local tool clients.
 
 ## CI Builds
 

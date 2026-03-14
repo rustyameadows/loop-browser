@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true
+  },
+  "include": [
+    "../protocol/src/**/*.ts",
+    "src/**/*.ts",
+    "test/**/*.ts"
+  ]
+}

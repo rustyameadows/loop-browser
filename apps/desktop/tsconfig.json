@@ -16,6 +16,7 @@
     "forge.env.d.ts",
     "vite.*.config.ts",
     "../../packages/protocol/src/**/*.ts",
+    "../../packages/selector/src/**/*.ts",
     "src/**/*.ts",
     "src/**/*.tsx",
     "test/**/*.ts"

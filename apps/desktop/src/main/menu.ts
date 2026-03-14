@@ -48,6 +48,11 @@ export const installAppMenu = (browserShell: BrowserShell): void => {
       accelerator: 'Alt+CmdOrCtrl+Shift+I',
       click: () => browserShell.toggleChromeDevTools(),
     },
+    {
+      label: 'Toggle Pick Mode',
+      accelerator: 'Alt+CmdOrCtrl+P',
+      click: () => browserShell.togglePicker(),
+    },
     { type: 'separator' },
     { role: 'resetZoom' },
     { role: 'zoomIn' },

@@ -53,10 +53,10 @@ input {
 
 .shell__panel {
   display: grid;
-  grid-template-rows: auto auto auto;
-  gap: 6px;
+  grid-template-rows: auto auto auto auto;
+  gap: 4px;
   height: 100%;
-  padding: 8px 12px 8px;
+  padding: 6px 12px;
   background: linear-gradient(180deg, var(--chrome-bg-top), var(--chrome-bg-bottom));
   border-bottom: 1px solid var(--border);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.88);
@@ -195,7 +195,7 @@ input {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  min-height: 42px;
+  min-height: 40px;
 }
 
 .shell__nav {
@@ -217,6 +217,21 @@ input {
 .shell__goButton:hover {
   border-color: #c3ccd7;
   background: var(--surface-strong);
+}
+
+.shell__navButton--picker {
+  color: #2567c7;
+  border-color: #cfe0ff;
+  background: linear-gradient(180deg, #f9fbff, #edf5ff);
+}
+
+.shell__navButton--pickerActive {
+  color: #0d63c9;
+  border-color: rgba(10, 132, 255, 0.45);
+  background: linear-gradient(180deg, #eef6ff, #dcecff);
+  box-shadow:
+    var(--shadow),
+    0 0 0 3px rgba(10, 132, 255, 0.1);
 }
 
 .shell__omnibox {
@@ -275,10 +290,10 @@ input {
 }
 
 .shell__diagnostic {
-  min-height: 18px;
+  min-height: 14px;
   padding: 0 4px 0 2px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10.5px;
   line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
@@ -286,12 +301,83 @@ input {
 }
 
 .shell__diagnostic--error {
-  padding: 6px 10px;
+  padding: 5px 10px;
   border: 1px solid var(--error-border);
   border-radius: 12px;
   background: var(--error-bg);
   color: var(--error-text);
   font-size: 12px;
+}
+
+.shell__selectionBar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid rgba(216, 221, 228, 0.9);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.shell__selectionBar--armed {
+  border-color: rgba(10, 132, 255, 0.32);
+  background: rgba(232, 242, 255, 0.9);
+}
+
+.shell__selectionBar--filled {
+  border-color: rgba(206, 213, 222, 0.96);
+}
+
+.shell__selectionCopy {
+  min-width: 0;
+}
+
+.shell__selectionTitle {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shell__selectionMeta {
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shell__selectionActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.shell__pillButton {
+  min-height: 28px;
+  padding: 0 11px;
+  border: 1px solid #cfe0ff;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #2567c7;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.shell__pillButton:hover {
+  border-color: #b8d2fb;
+  background: #f6fbff;
+}
+
+.shell__pillButton--muted {
+  border-color: var(--border);
+  color: var(--muted-strong);
 }
 
 .shell__icon {
@@ -353,5 +439,13 @@ input {
 
   .shell__utilityRail {
     display: none;
+  }
+
+  .shell__selectionBar {
+    grid-template-columns: 1fr;
+  }
+
+  .shell__selectionActions {
+    justify-content: flex-end;
   }
 }

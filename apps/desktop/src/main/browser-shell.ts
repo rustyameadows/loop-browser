@@ -2,30 +2,50 @@ import path from 'node:path';
 import {
   BaseWindow,
   WebContentsView,
+  type IpcMainEvent,
+  type IpcMainInvokeEvent,
   type WebContents,
   app,
   ipcMain,
   shell,
-  type IpcMainInvokeEvent,
 } from 'electron';
 import {
   NAVIGATION_COMMAND_CHANNEL,
   NAVIGATION_GET_STATE_CHANNEL,
   NAVIGATION_STATE_CHANNEL,
+  PAGE_PICKER_CONTROL_CHANNEL,
+  PAGE_PICKER_EVENT_CHANNEL,
+  PICKER_COMMAND_CHANNEL,
+  PICKER_GET_STATE_CHANNEL,
+  PICKER_STATE_CHANNEL,
   createEmptyNavigationState,
+  createEmptyPickerState,
   isNavigationCommand,
+  isPagePickerEvent,
+  isPickerCommand,
   type NavigationCommand,
   type NavigationState,
+  type PickerCommand,
+  type PickerState,
 } from '@agent-browser/protocol';
 import { fixtureFileUrl, isSafeExternalUrl, normalizeAddress } from './url';
 
-const CHROME_HEIGHT = 122;
+const CHROME_HEIGHT = 152;
+export const PRIMARY_TAB_ID = 'tab-1';
+
+export interface BrowserTabSnapshot {
+  tabId: string;
+  url: string;
+  title: string;
+  isLoading: boolean;
+}
 
 export class BrowserShell {
   private window: BaseWindow | null = null;
   private uiView: WebContentsView | null = null;
   private pageView: WebContentsView | null = null;
   private lastError: string | null = null;
+  private pickerState: PickerState = createEmptyPickerState();
 
   constructor() {
     this.registerIpcHandlers();
@@ -78,6 +98,9 @@ export class BrowserShell {
   dispose(): void {
     ipcMain.removeHandler(NAVIGATION_COMMAND_CHANNEL);
     ipcMain.removeHandler(NAVIGATION_GET_STATE_CHANNEL);
+    ipcMain.removeHandler(PICKER_COMMAND_CHANNEL);
+    ipcMain.removeHandler(PICKER_GET_STATE_CHANNEL);
+    ipcMain.removeAllListeners(PAGE_PICKER_EVENT_CHANNEL);
     this.destroyWindow();
   }
 
@@ -102,9 +125,80 @@ export class BrowserShell {
     this.toggleDevToolsFor(this.uiView?.webContents);
   }
 
+  togglePicker(): void {
+    void this.executePickerCommand({ action: 'toggle' });
+  }
+
+  listTabs(): BrowserTabSnapshot[] {
+    return [
+      {
+        tabId: PRIMARY_TAB_ID,
+        url: this.createNavigationState().url,
+        title: this.createNavigationState().title,
+        isLoading: this.createNavigationState().isLoading,
+      },
+    ];
+  }
+
+  getPickerState(): PickerState {
+    return {
+      enabled: this.pickerState.enabled,
+      lastSelection: this.pickerState.lastSelection,
+    };
+  }
+
+  getNavigationState(): NavigationState {
+    return this.createNavigationState();
+  }
+
+  async executeNavigationCommand(command: NavigationCommand): Promise<NavigationState> {
+    return this.executeNavigation(command);
+  }
+
+  async executePickerCommand(command: PickerCommand): Promise<PickerState> {
+    if (!this.pageView) {
+      throw new Error('Page view is not ready.');
+    }
+
+    switch (command.action) {
+      case 'enable':
+        this.pickerState = {
+          enabled: true,
+          lastSelection: null,
+        };
+        this.pageView.webContents.send(PAGE_PICKER_CONTROL_CHANNEL, { action: 'enable' });
+        break;
+      case 'disable':
+        this.pickerState = {
+          enabled: false,
+          lastSelection: this.pickerState.lastSelection,
+        };
+        this.pageView.webContents.send(PAGE_PICKER_CONTROL_CHANNEL, { action: 'disable' });
+        break;
+      case 'toggle':
+        return this.executePickerCommand({
+          action: this.pickerState.enabled ? 'disable' : 'enable',
+        });
+      case 'clearSelection':
+        this.pickerState = {
+          enabled: this.pickerState.enabled,
+          lastSelection: null,
+        };
+        break;
+      default:
+        break;
+    }
+
+    this.sendPickerState();
+    return this.getPickerState();
+  }
+
   private registerIpcHandlers(): void {
     ipcMain.removeHandler(NAVIGATION_COMMAND_CHANNEL);
     ipcMain.removeHandler(NAVIGATION_GET_STATE_CHANNEL);
+    ipcMain.removeHandler(PICKER_COMMAND_CHANNEL);
+    ipcMain.removeHandler(PICKER_GET_STATE_CHANNEL);
+    ipcMain.removeAllListeners(PAGE_PICKER_EVENT_CHANNEL);
 
     ipcMain.handle(
       NAVIGATION_COMMAND_CHANNEL,
@@ -126,6 +220,51 @@ export class BrowserShell {
         return this.createNavigationState();
       },
     );
+
+    ipcMain.handle(
+      PICKER_COMMAND_CHANNEL,
+      async (event: IpcMainInvokeEvent, payload: unknown): Promise<PickerState> => {
+        this.assertUiSender(event);
+
+        if (!isPickerCommand(payload)) {
+          throw new Error('Invalid picker command payload.');
+        }
+
+        return this.executePickerCommand(payload);
+      },
+    );
+
+    ipcMain.handle(
+      PICKER_GET_STATE_CHANNEL,
+      async (event: IpcMainInvokeEvent): Promise<PickerState> => {
+        this.assertUiSender(event);
+        return this.getPickerState();
+      },
+    );
+
+    ipcMain.on(PAGE_PICKER_EVENT_CHANNEL, (event: IpcMainEvent, payload: unknown) => {
+      if (!this.pageView || event.sender.id !== this.pageView.webContents.id) {
+        return;
+      }
+
+      if (!isPagePickerEvent(payload)) {
+        return;
+      }
+
+      if (payload.type === 'cancelled') {
+        this.pickerState = {
+          enabled: false,
+          lastSelection: this.pickerState.lastSelection,
+        };
+      } else {
+        this.pickerState = {
+          enabled: false,
+          lastSelection: payload.descriptor,
+        };
+      }
+
+      this.sendPickerState();
+    });
   }
 
   private assertUiSender(event: IpcMainInvokeEvent): void {
@@ -157,6 +296,7 @@ export class BrowserShell {
 
     webContents.on('did-start-loading', () => {
       this.lastError = null;
+      this.resetPickerOnNavigation();
       this.sendNavigationState();
     });
 
@@ -209,6 +349,7 @@ export class BrowserShell {
 
     this.uiView.webContents.once('did-finish-load', () => {
       this.sendNavigationState();
+      this.sendPickerState();
     });
 
     if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
@@ -318,12 +459,33 @@ export class BrowserShell {
     };
   }
 
+  private resetPickerOnNavigation(): void {
+    if (this.pickerState.enabled && this.pageView && !this.pageView.webContents.isDestroyed()) {
+      this.pageView.webContents.send(PAGE_PICKER_CONTROL_CHANNEL, { action: 'disable' });
+    }
+
+    if (!this.pickerState.enabled && this.pickerState.lastSelection === null) {
+      return;
+    }
+
+    this.pickerState = createEmptyPickerState();
+    this.sendPickerState();
+  }
+
   private sendNavigationState(): void {
     if (!this.uiView || this.uiView.webContents.isDestroyed()) {
       return;
     }
 
     this.uiView.webContents.send(NAVIGATION_STATE_CHANNEL, this.createNavigationState());
+  }
+
+  private sendPickerState(): void {
+    if (!this.uiView || this.uiView.webContents.isDestroyed()) {
+      return;
+    }
+
+    this.uiView.webContents.send(PICKER_STATE_CHANNEL, this.getPickerState());
   }
 
   private destroyWindow(): void {

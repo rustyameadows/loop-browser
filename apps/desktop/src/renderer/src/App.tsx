@@ -1,17 +1,23 @@
-import { useEffect, useState, type FormEvent, type JSX, type SVGProps } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type JSX, type SVGProps } from 'react';
 import {
   createEmptyNavigationState,
+  createEmptyPickerState,
+  type ElementDescriptor,
   type NavigationCommand,
   type NavigationState,
+  type PickerCommand,
+  type PickerState,
 } from '@agent-browser/protocol';
 
 const emptyState = createEmptyNavigationState();
+const emptyPickerState = createEmptyPickerState();
 const stubTabs = ['Agent Chat', 'Inspector'];
 
 type IconName =
   | 'arrowUpRight'
   | 'chevronLeft'
   | 'chevronRight'
+  | 'crosshair'
   | 'file'
   | 'globe'
   | 'plus'
@@ -44,7 +50,8 @@ const getQuietStatus = (state: NavigationState): string => {
 
   try {
     const parsed = new URL(state.url);
-    const destination = parsed.protocol === 'file:' ? 'local fixture' : parsed.hostname.replace(/^www\./, '');
+    const destination =
+      parsed.protocol === 'file:' ? 'local fixture' : parsed.hostname.replace(/^www\./, '');
     return `Single-tab preview | ${destination}`;
   } catch {
     return 'Single-tab preview';
@@ -52,6 +59,28 @@ const getQuietStatus = (state: NavigationState): string => {
 };
 
 const getLocationIcon = (url: string): IconName => (url.startsWith('file:') ? 'file' : 'globe');
+
+const getSelectionHeading = (selection: ElementDescriptor): string => {
+  const parts = [selection.tag];
+  if (selection.id) {
+    parts.push(`#${selection.id}`);
+  }
+
+  if (selection.classList.length > 0) {
+    parts.push(`.${selection.classList.slice(0, 2).join('.')}`);
+  }
+
+  return parts.join('');
+};
+
+const getSelectionMeta = (selection: ElementDescriptor): string => {
+  const summaryParts = [selection.selector];
+  if (selection.textSnippet) {
+    summaryParts.push(selection.textSnippet);
+  }
+
+  return summaryParts.join(' | ');
+};
 
 const ChromeIcon = ({
   name,
@@ -61,13 +90,25 @@ const ChromeIcon = ({
     case 'chevronLeft':
       return (
         <svg fill="none" viewBox="0 0 20 20" {...props}>
-          <path d="M11.75 4.75 6.5 10l5.25 5.25" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
+          <path
+            d="M11.75 4.75 6.5 10l5.25 5.25"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.8"
+          />
         </svg>
       );
     case 'chevronRight':
       return (
         <svg fill="none" viewBox="0 0 20 20" {...props}>
-          <path d="M8.25 4.75 13.5 10l-5.25 5.25" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
+          <path
+            d="M8.25 4.75 13.5 10l-5.25 5.25"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.8"
+          />
         </svg>
       );
     case 'reload':
@@ -85,7 +126,12 @@ const ChromeIcon = ({
     case 'plus':
       return (
         <svg fill="none" viewBox="0 0 20 20" {...props}>
-          <path d="M10 4.5v11m-5.5-5.5h11" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" />
+          <path
+            d="M10 4.5v11m-5.5-5.5h11"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeWidth="1.8"
+          />
         </svg>
       );
     case 'search':
@@ -107,7 +153,12 @@ const ChromeIcon = ({
     case 'sliders':
       return (
         <svg fill="none" viewBox="0 0 20 20" {...props}>
-          <path d="M4 5.5h12M4 10h12M4 14.5h12" stroke="currentColor" strokeLinecap="round" strokeWidth="1.6" />
+          <path
+            d="M4 5.5h12M4 10h12M4 14.5h12"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeWidth="1.6"
+          />
           <circle cx="7" cy="5.5" fill="currentColor" r="1.4" />
           <circle cx="12.5" cy="10" fill="currentColor" r="1.4" />
           <circle cx="9.5" cy="14.5" fill="currentColor" r="1.4" />
@@ -122,20 +173,48 @@ const ChromeIcon = ({
             strokeLinejoin="round"
             strokeWidth="1.6"
           />
-          <path d="M11.75 3.5v3h3" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.6" />
+          <path
+            d="M11.75 3.5v3h3"
+            stroke="currentColor"
+            strokeLinejoin="round"
+            strokeWidth="1.6"
+          />
         </svg>
       );
     case 'arrowUpRight':
       return (
         <svg fill="none" viewBox="0 0 20 20" {...props}>
-          <path d="M6.5 13.5 13.5 6.5m-5 .5h5v5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
+          <path
+            d="M6.5 13.5 13.5 6.5m-5 .5h5v5"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.8"
+          />
+        </svg>
+      );
+    case 'crosshair':
+      return (
+        <svg fill="none" viewBox="0 0 20 20" {...props}>
+          <circle cx="10" cy="10" r="4.2" stroke="currentColor" strokeWidth="1.6" />
+          <path
+            d="M10 2.75v2.4m0 9.7v2.4M2.75 10h2.4m9.7 0h2.4"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeWidth="1.6"
+          />
         </svg>
       );
     case 'globe':
       return (
         <svg fill="none" viewBox="0 0 20 20" {...props}>
           <circle cx="10" cy="10" r="6.25" stroke="currentColor" strokeWidth="1.6" />
-          <path d="M4.5 10h11M10 3.75c1.8 1.75 2.7 3.83 2.7 6.25S11.8 14.5 10 16.25M10 3.75c-1.8 1.75-2.7 3.83-2.7 6.25S8.2 14.5 10 16.25" stroke="currentColor" strokeLinecap="round" strokeWidth="1.4" />
+          <path
+            d="M4.5 10h11M10 3.75c1.8 1.75 2.7 3.83 2.7 6.25S11.8 14.5 10 16.25M10 3.75c-1.8 1.75-2.7 3.83-2.7 6.25S8.2 14.5 10 16.25"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeWidth="1.4"
+          />
         </svg>
       );
   }
@@ -143,8 +222,11 @@ const ChromeIcon = ({
 
 export const App = (): JSX.Element => {
   const [navigationState, setNavigationState] = useState<NavigationState>(emptyState);
+  const [pickerState, setPickerState] = useState<PickerState>(emptyPickerState);
   const [draftUrl, setDraftUrl] = useState('');
   const [isEditingAddress, setIsEditingAddress] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState('Copy JSON');
+  const copyTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -178,6 +260,37 @@ export const App = (): JSX.Element => {
     };
   }, [isEditingAddress]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    const syncInitialPickerState = async (): Promise<void> => {
+      const initialState = await window.agentBrowser.getPickerState();
+      if (!isMounted) {
+        return;
+      }
+
+      setPickerState(initialState);
+    };
+
+    void syncInitialPickerState();
+
+    const unsubscribe = window.agentBrowser.subscribePicker((nextState) => {
+      if (!isMounted) {
+        return;
+      }
+
+      setPickerState(nextState);
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+    };
+  }, []);
+
   const runCommand = async (command: NavigationCommand): Promise<void> => {
     const nextState = await window.agentBrowser.execute(command);
     setNavigationState(nextState);
@@ -188,14 +301,48 @@ export const App = (): JSX.Element => {
     }
   };
 
+  const runPickerCommand = async (command: PickerCommand): Promise<void> => {
+    const nextState = await window.agentBrowser.executePicker(command);
+    setPickerState(nextState);
+  };
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
     await runCommand({ action: 'navigate', target: draftUrl });
   };
 
+  const handleCopyDescriptor = (): void => {
+    if (!pickerState.lastSelection) {
+      return;
+    }
+
+    window.agentBrowser.copyText(JSON.stringify(pickerState.lastSelection, null, 2));
+    setCopyFeedback('Copied');
+
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+    }
+
+    copyTimerRef.current = window.setTimeout(() => {
+      setCopyFeedback('Copy JSON');
+      copyTimerRef.current = null;
+    }, 1500);
+  };
+
   const activeTabLabel = getActiveTabLabel(navigationState);
   const diagnosticLabel = navigationState.lastError ?? getQuietStatus(navigationState);
   const locationIcon = getLocationIcon(navigationState.url);
+  const selection = pickerState.lastSelection;
+  const inspectorHeading = pickerState.enabled
+    ? 'Pick mode is active'
+    : selection
+      ? getSelectionHeading(selection)
+      : 'DOM picker ready';
+  const inspectorMeta = pickerState.enabled
+    ? 'Click any element in the page, or press Esc to cancel.'
+    : selection
+      ? getSelectionMeta(selection)
+      : 'Use the crosshair button or View > Toggle Pick Mode.';
 
   return (
     <main className="shell">
@@ -206,8 +353,16 @@ export const App = (): JSX.Element => {
               <ChromeIcon className="shell__icon" name="plus" />
             </div>
 
-            <div className={`shell__tab shell__tab--active${navigationState.isLoading ? ' shell__tab--loading' : ''}`}>
-              <span className={`shell__tabIndicator${navigationState.isLoading ? ' shell__tabIndicator--loading' : ''}`} />
+            <div
+              className={`shell__tab shell__tab--active${
+                navigationState.isLoading ? ' shell__tab--loading' : ''
+              }`}
+            >
+              <span
+                className={`shell__tabIndicator${
+                  navigationState.isLoading ? ' shell__tabIndicator--loading' : ''
+                }`}
+              />
               <span className="shell__tabTitle">{activeTabLabel}</span>
             </div>
 
@@ -276,7 +431,9 @@ export const App = (): JSX.Element => {
               <input
                 autoCapitalize="off"
                 autoCorrect="off"
-                className={`shell__omniboxInput${isEditingAddress ? ' shell__omniboxInput--editing' : ''}`}
+                className={`shell__omniboxInput${
+                  isEditingAddress ? ' shell__omniboxInput--editing' : ''
+                }`}
                 onBlur={() => setIsEditingAddress(false)}
                 onChange={(event) => setDraftUrl(event.target.value)}
                 onFocus={() => setIsEditingAddress(true)}
@@ -289,6 +446,17 @@ export const App = (): JSX.Element => {
           </label>
 
           <div className="shell__toolbarEdge">
+            <button
+              aria-label={pickerState.enabled ? 'Disable pick mode' : 'Enable pick mode'}
+              aria-pressed={pickerState.enabled}
+              className={`shell__navButton shell__navButton--picker${
+                pickerState.enabled ? ' shell__navButton--pickerActive' : ''
+              }`}
+              onClick={() => void runPickerCommand({ action: 'toggle' })}
+              type="button"
+            >
+              <ChromeIcon className="shell__icon" name="crosshair" />
+            </button>
             <div aria-hidden="true" className="shell__toolbarStub">
               <ChromeIcon className="shell__icon shell__icon--muted" name="sliders" />
             </div>
@@ -298,8 +466,40 @@ export const App = (): JSX.Element => {
           </div>
         </form>
 
-        <div className={`shell__diagnostic${navigationState.lastError ? ' shell__diagnostic--error' : ''}`}>
+        <div
+          className={`shell__diagnostic${
+            navigationState.lastError ? ' shell__diagnostic--error' : ''
+          }`}
+        >
           {diagnosticLabel}
+        </div>
+
+        <div
+          className={`shell__selectionBar${
+            pickerState.enabled ? ' shell__selectionBar--armed' : ''
+          }${selection ? ' shell__selectionBar--filled' : ''}`}
+        >
+          <div className="shell__selectionCopy">
+            <div className="shell__selectionTitle">{inspectorHeading}</div>
+            <div className="shell__selectionMeta">{inspectorMeta}</div>
+          </div>
+
+          <div className="shell__selectionActions">
+            {selection ? (
+              <button className="shell__pillButton" onClick={handleCopyDescriptor} type="button">
+                {copyFeedback}
+              </button>
+            ) : null}
+            {selection ? (
+              <button
+                className="shell__pillButton shell__pillButton--muted"
+                onClick={() => void runPickerCommand({ action: 'clearSelection' })}
+                type="button"
+              >
+                Clear
+              </button>
+            ) : null}
+          </div>
         </div>
       </section>
     </main>

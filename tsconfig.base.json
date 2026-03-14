@@ -19,8 +19,10 @@
     "paths": {
       "@agent-browser/protocol": [
         "packages/protocol/src/index.ts"
+      ],
+      "@agent-browser/selector": [
+        "packages/selector/src/index.ts"
       ]
     }
   }
 }
-
