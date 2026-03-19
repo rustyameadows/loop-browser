@@ -15,7 +15,8 @@
     "@agent-browser/protocol": "0.1.0",
     "defuddle": "^0.13.0",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.1",

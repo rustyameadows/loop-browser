@@ -1,6 +1,7 @@
 import type { McpAgentActivityPhase, McpViewCommand, McpViewState } from './mcp';
 import type { MarkdownViewCommand, MarkdownViewState } from './markdown';
 import type { FeedbackCommand, FeedbackState } from './feedback';
+import type { ChromeAppearanceCommand, ChromeAppearanceState } from './appearance';
 
 export const NAVIGATION_COMMAND_CHANNEL = 'navigation:command';
 export const NAVIGATION_GET_STATE_CHANNEL = 'navigation:get-state';
@@ -113,6 +114,9 @@ export interface NavigationBridge {
   executeMcpView(command: McpViewCommand): Promise<McpViewState>;
   getMcpViewState(): Promise<McpViewState>;
   subscribeMcpView(listener: (state: McpViewState) => void): () => void;
+  executeChromeAppearance(command: ChromeAppearanceCommand): Promise<ChromeAppearanceState>;
+  getChromeAppearanceState(): Promise<ChromeAppearanceState>;
+  subscribeChromeAppearance(listener: (state: ChromeAppearanceState) => void): () => void;
   executeFeedback(command: FeedbackCommand): Promise<FeedbackState>;
   getFeedbackState(): Promise<FeedbackState>;
   subscribeFeedback(listener: (state: FeedbackState) => void): () => void;
@@ -121,7 +125,7 @@ export interface NavigationBridge {
 
 export const createEmptyNavigationState = (): NavigationState => ({
   url: '',
-  title: 'Agent Browser',
+  title: 'Loop Browser',
   isLoading: false,
   canGoBack: false,
   canGoForward: false,

@@ -8,14 +8,20 @@ import {
   type WebContents,
   app,
   desktopCapturer,
+  dialog,
   ipcMain,
+  nativeImage,
   screen,
   shell,
 } from 'electron';
 import {
+  CHROME_APPEARANCE_COMMAND_CHANNEL,
+  CHROME_APPEARANCE_GET_STATE_CHANNEL,
+  CHROME_APPEARANCE_STATE_CHANNEL,
   FEEDBACK_COMMAND_CHANNEL,
   FEEDBACK_GET_STATE_CHANNEL,
   FEEDBACK_STATE_CHANNEL,
+  createEmptyChromeAppearanceState,
   type ResizeWindowRequest,
   type ScreenshotFormat,
   type ScreenshotRequest,
@@ -43,11 +49,14 @@ import {
   createEmptyNavigationState,
   createEmptyPickerState,
   isFeedbackCommand,
+  isChromeAppearanceCommand,
   isMcpViewCommand,
   isMarkdownViewCommand,
   isNavigationCommand,
   isPagePickerEvent,
   isPickerCommand,
+  type ChromeAppearanceCommand,
+  type ChromeAppearanceState,
   type FeedbackAnnotation,
   type FeedbackAuthor,
   type FeedbackCommand,
@@ -65,6 +74,16 @@ import {
 import { extractMarkdownFromHtml } from './markdown';
 import { mapDiagnosticsToMcpViewState, type McpDiagnosticsSource } from './mcp-view';
 import {
+  composeDefaultDockIcon,
+  composeProjectDockIcon,
+  dockIconTemplatePath,
+} from './project-dock-icon';
+import {
+  PROJECT_SELECTION_FILE_NAME,
+  ProjectAppearanceController,
+  type ProjectAppearanceRuntime,
+} from './project-appearance';
+import {
   CHROME_HEIGHT,
   SIDE_PANEL_BREAKPOINT,
   SIDE_PANEL_WIDTH,
@@ -80,9 +99,9 @@ import { fixtureFileUrl, isSafeExternalUrl, normalizeAddress } from './url';
 export const PRIMARY_TAB_ID = 'tab-1';
 const AGENT_DONE_PULSE_MS = 1600;
 
-type TrustedSurface = 'chrome' | 'markdown' | 'mcp' | 'feedback';
+type TrustedSurface = 'chrome' | 'markdown' | 'mcp' | 'feedback' | 'project';
 
-type SidePanelKind = 'markdown' | 'mcp' | 'feedback';
+type SidePanelKind = 'markdown' | 'mcp' | 'feedback' | 'project';
 
 type PageMarkupSnapshot = {
   html: string;
@@ -109,6 +128,8 @@ export interface BrowserTabSnapshot {
 
 interface BrowserShellOptions {
   initialUrl?: string;
+  projectAppearance?: ProjectAppearanceRuntime;
+  dockIconTemplatePath?: string;
 }
 
 export class BrowserShell {
@@ -118,20 +139,54 @@ export class BrowserShell {
   private markdownPanelView: WebContentsView | null = null;
   private mcpPanelView: WebContentsView | null = null;
   private feedbackPanelView: WebContentsView | null = null;
+  private projectPanelView: WebContentsView | null = null;
   private markdownPanelMounted = false;
   private mcpPanelMounted = false;
   private feedbackPanelMounted = false;
+  private projectPanelMounted = false;
   private lastError: string | null = null;
   private pickerState: PickerState = createEmptyPickerState();
   private feedbackState: FeedbackState = createEmptyFeedbackState();
   private markdownViewState: MarkdownViewState = createEmptyMarkdownViewState();
   private mcpViewState: McpViewState = createEmptyMcpViewState();
+  private chromeAppearanceState: ChromeAppearanceState = createEmptyChromeAppearanceState();
   private markdownRequestId = 0;
   private mcpDiagnosticsSource: McpDiagnosticsSource | null = null;
   private mcpDiagnosticsUnsubscribe: (() => void) | null = null;
+  private readonly projectAppearance: ProjectAppearanceRuntime;
+  private readonly disposeProjectAppearance: boolean;
+  private readonly projectDockTemplatePath: string;
+  private readonly projectAppearanceUnsubscribe: () => void;
+  private dockIconError: string | null = null;
+  private appliedDockIconKey: string | null = null;
 
   constructor(private readonly options: BrowserShellOptions = {}) {
+    this.projectAppearance =
+      options.projectAppearance ??
+      new ProjectAppearanceController(path.join(app.getPath('userData'), PROJECT_SELECTION_FILE_NAME));
+    this.disposeProjectAppearance = !options.projectAppearance;
+    this.projectDockTemplatePath =
+      options.dockIconTemplatePath ??
+      dockIconTemplatePath({
+        appPath: app.getAppPath(),
+        isPackaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
+      });
+    this.chromeAppearanceState = {
+      ...this.projectAppearance.getState(),
+      isOpen: false,
+    };
     this.registerIpcHandlers();
+    this.projectAppearanceUnsubscribe = this.projectAppearance.subscribe((state) => {
+      this.chromeAppearanceState = {
+        ...state,
+        isOpen: this.chromeAppearanceState.isOpen,
+        lastError: this.composeChromeAppearanceError(state.lastError, this.dockIconError),
+      };
+      this.applyChromeAppearance();
+      void this.syncDockIcon();
+      this.sendChromeAppearanceState();
+    });
   }
 
   ensureWindow(): void {
@@ -146,7 +201,7 @@ export class BrowserShell {
       minWidth: 980,
       minHeight: 720,
       title: 'Loop Browser',
-      backgroundColor: '#edf0f4',
+      backgroundColor: this.chromeAppearanceState.chromeColor,
       titleBarStyle: 'hiddenInset',
     });
 
@@ -167,6 +222,8 @@ export class BrowserShell {
     this.attachPageEvents();
     this.attachPopupPolicy();
     this.layoutViews();
+    this.applyChromeAppearance();
+    void this.syncDockIcon();
     void this.loadInitialPage();
   }
 
@@ -179,11 +236,17 @@ export class BrowserShell {
     ipcMain.removeHandler(MARKDOWN_VIEW_GET_STATE_CHANNEL);
     ipcMain.removeHandler(MCP_VIEW_COMMAND_CHANNEL);
     ipcMain.removeHandler(MCP_VIEW_GET_STATE_CHANNEL);
+    ipcMain.removeHandler(CHROME_APPEARANCE_COMMAND_CHANNEL);
+    ipcMain.removeHandler(CHROME_APPEARANCE_GET_STATE_CHANNEL);
     ipcMain.removeHandler(FEEDBACK_COMMAND_CHANNEL);
     ipcMain.removeHandler(FEEDBACK_GET_STATE_CHANNEL);
     ipcMain.removeAllListeners(PAGE_PICKER_EVENT_CHANNEL);
     this.mcpDiagnosticsUnsubscribe?.();
     this.mcpDiagnosticsUnsubscribe = null;
+    this.projectAppearanceUnsubscribe();
+    if (this.disposeProjectAppearance) {
+      this.projectAppearance.dispose();
+    }
     this.destroyWindow();
   }
 
@@ -224,6 +287,10 @@ export class BrowserShell {
     void this.executeFeedbackCommand({ action: 'toggle' });
   }
 
+  selectProjectFolder(): void {
+    void this.executeChromeAppearanceCommand({ action: 'selectProject' });
+  }
+
   listTabs(): BrowserTabSnapshot[] {
     const navigationState = this.createNavigationState();
 
@@ -260,6 +327,10 @@ export class BrowserShell {
       agentActivity: this.mcpViewState.agentActivity ? { ...this.mcpViewState.agentActivity } : null,
       lastSelfTest: { ...this.mcpViewState.lastSelfTest },
     };
+  }
+
+  getChromeAppearanceState(): ChromeAppearanceState {
+    return { ...this.chromeAppearanceState };
   }
 
   getFeedbackState(): FeedbackState {
@@ -440,6 +511,59 @@ export class BrowserShell {
     }
   }
 
+  async executeChromeAppearanceCommand(
+    command: ChromeAppearanceCommand,
+  ): Promise<ChromeAppearanceState> {
+    switch (command.action) {
+      case 'open':
+        return this.openProjectPanel();
+      case 'close':
+        return this.closeProjectPanel();
+      case 'selectProject': {
+        const nextState = await this.promptForProjectFolder();
+        this.chromeAppearanceState = {
+          ...nextState,
+          isOpen: this.chromeAppearanceState.isOpen,
+          lastError: this.composeChromeAppearanceError(nextState.lastError, this.dockIconError),
+        };
+        this.applyChromeAppearance();
+        void this.syncDockIcon();
+        this.sendChromeAppearanceState();
+        return this.getChromeAppearanceState();
+      }
+      case 'set': {
+        const nextState = await this.projectAppearance.setAppearance({
+          chromeColor: command.chromeColor,
+          accentColor: command.accentColor,
+          projectIconPath: command.projectIconPath,
+        });
+        this.chromeAppearanceState = {
+          ...nextState,
+          isOpen: this.chromeAppearanceState.isOpen,
+          lastError: this.composeChromeAppearanceError(nextState.lastError, this.dockIconError),
+        };
+        this.applyChromeAppearance();
+        void this.syncDockIcon();
+        this.sendChromeAppearanceState();
+        return this.getChromeAppearanceState();
+      }
+      case 'reset': {
+        const nextState = await this.projectAppearance.resetAppearance();
+        this.chromeAppearanceState = {
+          ...nextState,
+          isOpen: this.chromeAppearanceState.isOpen,
+          lastError: this.composeChromeAppearanceError(nextState.lastError, this.dockIconError),
+        };
+        this.applyChromeAppearance();
+        void this.syncDockIcon();
+        this.sendChromeAppearanceState();
+        return this.getChromeAppearanceState();
+      }
+      default:
+        return this.getChromeAppearanceState();
+    }
+  }
+
   async executeFeedbackCommand(command: FeedbackCommand): Promise<FeedbackState> {
     switch (command.action) {
       case 'open':
@@ -568,6 +692,8 @@ export class BrowserShell {
     ipcMain.removeHandler(MARKDOWN_VIEW_GET_STATE_CHANNEL);
     ipcMain.removeHandler(MCP_VIEW_COMMAND_CHANNEL);
     ipcMain.removeHandler(MCP_VIEW_GET_STATE_CHANNEL);
+    ipcMain.removeHandler(CHROME_APPEARANCE_COMMAND_CHANNEL);
+    ipcMain.removeHandler(CHROME_APPEARANCE_GET_STATE_CHANNEL);
     ipcMain.removeHandler(FEEDBACK_COMMAND_CHANNEL);
     ipcMain.removeHandler(FEEDBACK_GET_STATE_CHANNEL);
     ipcMain.removeAllListeners(PAGE_PICKER_EVENT_CHANNEL);
@@ -654,6 +780,24 @@ export class BrowserShell {
     });
 
     ipcMain.handle(
+      CHROME_APPEARANCE_COMMAND_CHANNEL,
+      async (event: IpcMainInvokeEvent, payload: unknown): Promise<ChromeAppearanceState> => {
+        this.assertTrustedSender(event);
+
+        if (!isChromeAppearanceCommand(payload)) {
+          throw new Error('Invalid chrome appearance command payload.');
+        }
+
+        return this.executeChromeAppearanceCommand(payload);
+      },
+    );
+
+    ipcMain.handle(CHROME_APPEARANCE_GET_STATE_CHANNEL, async (event: IpcMainInvokeEvent) => {
+      this.assertTrustedSender(event);
+      return this.getChromeAppearanceState();
+    });
+
+    ipcMain.handle(
       FEEDBACK_COMMAND_CHANNEL,
       async (event: IpcMainInvokeEvent, payload: unknown): Promise<FeedbackState> => {
         this.assertTrustedSender(event);
@@ -713,6 +857,7 @@ export class BrowserShell {
       this.uiView?.webContents.id,
       this.markdownPanelView?.webContents.id,
       this.mcpPanelView?.webContents.id,
+      this.projectPanelView?.webContents.id,
       this.feedbackPanelView?.webContents.id,
     ].filter((value): value is number => typeof value === 'number');
 
@@ -819,6 +964,7 @@ export class BrowserShell {
       this.sendFeedbackState();
       this.sendMarkdownViewState();
       this.sendMcpViewState();
+      this.sendChromeAppearanceState();
     });
 
     this.loadTrustedSurface(view, surface);
@@ -868,6 +1014,8 @@ export class BrowserShell {
         ? this.markdownPanelView
         : activeSidePanel === 'mcp'
           ? this.mcpPanelView
+          : activeSidePanel === 'project'
+            ? this.projectPanelView
           : null;
 
     this.uiView.setBounds({
@@ -1240,6 +1388,7 @@ export class BrowserShell {
   private openFeedbackPanel(): FeedbackState {
     this.closeMarkdownPanel(false);
     this.closeMcpPanel(false);
+    this.closeProjectPanel(false);
     this.ensureFeedbackPanelMounted();
     this.feedbackState = {
       ...this.feedbackState,
@@ -1249,6 +1398,7 @@ export class BrowserShell {
     this.layoutViews();
     this.sendMarkdownViewState();
     this.sendMcpViewState();
+    this.sendChromeAppearanceState();
     this.sendFeedbackState();
     return this.getFeedbackState();
   }
@@ -1289,6 +1439,7 @@ export class BrowserShell {
   private async openMarkdownPanel(): Promise<MarkdownViewState> {
     this.closeFeedbackPanel(false);
     this.closeMcpPanel(false);
+    this.closeProjectPanel(false);
     this.ensureMarkdownPanelMounted();
 
     this.markdownViewState = {
@@ -1300,6 +1451,7 @@ export class BrowserShell {
     this.layoutViews();
     this.sendFeedbackState();
     this.sendMcpViewState();
+    this.sendChromeAppearanceState();
     this.sendMarkdownViewState();
 
     return this.refreshMarkdownView(false);
@@ -1340,6 +1492,7 @@ export class BrowserShell {
   private openMcpPanel(): McpViewState {
     this.closeFeedbackPanel(false);
     this.closeMarkdownPanel(false);
+    this.closeProjectPanel(false);
     this.ensureMcpPanelMounted();
     this.syncMcpViewState(false);
     this.mcpViewState = {
@@ -1383,6 +1536,186 @@ export class BrowserShell {
       this.window.contentView.addChildView(this.mcpPanelView);
       this.mcpPanelMounted = true;
     }
+  }
+
+  private openProjectPanel(): ChromeAppearanceState {
+    this.closeFeedbackPanel(false);
+    this.closeMarkdownPanel(false);
+    this.closeMcpPanel(false);
+    this.ensureProjectPanelMounted();
+    this.chromeAppearanceState = {
+      ...this.chromeAppearanceState,
+      isOpen: true,
+    };
+    this.layoutViews();
+    this.sendFeedbackState();
+    this.sendMarkdownViewState();
+    this.sendMcpViewState();
+    this.sendChromeAppearanceState();
+    return this.getChromeAppearanceState();
+  }
+
+  private closeProjectPanel(notify = true): ChromeAppearanceState {
+    if (this.window && this.projectPanelView && this.projectPanelMounted) {
+      this.window.contentView.removeChildView(this.projectPanelView);
+      this.projectPanelMounted = false;
+    }
+
+    this.chromeAppearanceState = {
+      ...this.chromeAppearanceState,
+      isOpen: false,
+    };
+    this.layoutViews();
+    if (notify) {
+      this.sendChromeAppearanceState();
+    }
+    return this.getChromeAppearanceState();
+  }
+
+  private async promptForProjectFolder(): Promise<ChromeAppearanceState> {
+    this.ensureWindow();
+
+    if (!this.window) {
+      return this.getChromeAppearanceState();
+    }
+
+    const result = await dialog.showOpenDialog(this.window, {
+      title: 'Choose Project Folder',
+      buttonLabel: 'Choose Folder',
+      properties: ['openDirectory', 'createDirectory'],
+      defaultPath: this.chromeAppearanceState.projectRoot || undefined,
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return this.getChromeAppearanceState();
+    }
+
+    return this.projectAppearance.selectProject(result.filePaths[0]);
+  }
+
+  private ensureProjectPanelMounted(): void {
+    if (!this.window) {
+      throw new Error('Window is not ready.');
+    }
+
+    if (!this.projectPanelView) {
+      this.projectPanelView = this.createTrustedView('project');
+    }
+
+    if (!this.projectPanelMounted) {
+      this.window.contentView.addChildView(this.projectPanelView);
+      this.projectPanelMounted = true;
+    }
+  }
+
+  private applyChromeAppearance(): void {
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.setBackgroundColor(this.chromeAppearanceState.chromeColor);
+    }
+
+    this.sendChromeAppearanceState();
+  }
+
+  private composeChromeAppearanceError(
+    stateError: string | null,
+    runtimeError: string | null,
+  ): string | null {
+    if (stateError && runtimeError) {
+      return `${stateError} ${runtimeError}`;
+    }
+
+    return stateError ?? runtimeError;
+  }
+
+  private async syncDockIcon(): Promise<void> {
+    if (process.platform !== 'darwin' || !app.dock) {
+      return;
+    }
+
+    const iconPath = this.chromeAppearanceState.resolvedProjectIconPath;
+    const defaultDockIconKey = `default:${this.chromeAppearanceState.accentColor}`;
+    if (!iconPath) {
+      if (this.appliedDockIconKey !== defaultDockIconKey) {
+        try {
+          const buffer = await composeDefaultDockIcon({
+            accentColor: this.chromeAppearanceState.accentColor,
+            templatePath: this.projectDockTemplatePath,
+          });
+          const icon = nativeImage.createFromBuffer(buffer);
+          if (!icon.isEmpty()) {
+            app.dock.setIcon(icon);
+            this.appliedDockIconKey = defaultDockIconKey;
+          }
+          this.dockIconError = null;
+        } catch (error) {
+          this.dockIconError =
+            error instanceof Error
+              ? `Could not compose Loop Browser dock icon: ${error.message}`
+              : 'Could not compose Loop Browser dock icon.';
+          this.appliedDockIconKey = null;
+        }
+      } else {
+        this.dockIconError = null;
+      }
+
+      this.chromeAppearanceState = {
+        ...this.chromeAppearanceState,
+        lastError: this.composeChromeAppearanceError(
+          this.projectAppearance.getState().lastError,
+          this.dockIconError,
+        ),
+      };
+      this.sendChromeAppearanceState();
+      return;
+    }
+
+    const dockIconKey = `${iconPath}:${this.chromeAppearanceState.accentColor}`;
+    if (dockIconKey === this.appliedDockIconKey) {
+      return;
+    }
+
+    try {
+      const buffer = await composeProjectDockIcon({
+        accentColor: this.chromeAppearanceState.accentColor,
+        projectIconPath: iconPath,
+        templatePath: this.projectDockTemplatePath,
+      });
+      const icon = nativeImage.createFromBuffer(buffer);
+      if (!icon.isEmpty()) {
+        app.dock.setIcon(icon);
+        this.appliedDockIconKey = dockIconKey;
+      }
+      this.dockIconError = null;
+    } catch (error) {
+      this.dockIconError =
+        error instanceof Error
+          ? `Could not compose project dock icon: ${error.message}`
+          : 'Could not compose project dock icon.';
+      try {
+        const fallbackBuffer = await composeDefaultDockIcon({
+          accentColor: this.chromeAppearanceState.accentColor,
+          templatePath: this.projectDockTemplatePath,
+        });
+        const fallbackIcon = nativeImage.createFromBuffer(fallbackBuffer);
+        if (!fallbackIcon.isEmpty()) {
+          app.dock.setIcon(fallbackIcon);
+          this.appliedDockIconKey = defaultDockIconKey;
+        } else {
+          this.appliedDockIconKey = null;
+        }
+      } catch {
+        this.appliedDockIconKey = null;
+      }
+    }
+
+    this.chromeAppearanceState = {
+      ...this.chromeAppearanceState,
+      lastError: this.composeChromeAppearanceError(
+        this.projectAppearance.getState().lastError,
+        this.dockIconError,
+      ),
+    };
+    this.sendChromeAppearanceState();
   }
 
   private async refreshMarkdownView(forceRefresh: boolean): Promise<MarkdownViewState> {
@@ -1495,6 +1828,10 @@ export class BrowserShell {
 
     if (this.mcpViewState.isOpen && this.mcpPanelView && this.mcpPanelMounted) {
       return 'mcp';
+    }
+
+    if (this.chromeAppearanceState.isOpen && this.projectPanelView && this.projectPanelMounted) {
+      return 'project';
     }
 
     if (this.markdownViewState.isOpen && this.markdownPanelView && this.markdownPanelMounted) {
@@ -1613,6 +1950,10 @@ export class BrowserShell {
     this.sendPageAgentOverlay();
   }
 
+  private sendChromeAppearanceState(): void {
+    this.sendToTrustedViews(CHROME_APPEARANCE_STATE_CHANNEL, this.getChromeAppearanceState());
+  }
+
   private sendPageAgentOverlay(): void {
     if (!this.pageView || this.pageView.webContents.isDestroyed()) {
       return;
@@ -1622,7 +1963,13 @@ export class BrowserShell {
   }
 
   private sendToTrustedViews(channel: string, payload: unknown): void {
-    for (const view of [this.uiView, this.feedbackPanelView, this.markdownPanelView, this.mcpPanelView]) {
+    for (const view of [
+      this.uiView,
+      this.feedbackPanelView,
+      this.markdownPanelView,
+      this.mcpPanelView,
+      this.projectPanelView,
+    ]) {
       if (!view || view.webContents.isDestroyed()) {
         continue;
       }
@@ -1634,16 +1981,19 @@ export class BrowserShell {
   private destroyWindow(): void {
     this.closeManagedView(this.feedbackPanelView);
     this.closeManagedView(this.mcpPanelView);
+    this.closeManagedView(this.projectPanelView);
     this.closeManagedView(this.markdownPanelView);
     this.closeManagedView(this.pageView);
     this.closeManagedView(this.uiView);
     this.feedbackPanelView = null;
     this.mcpPanelView = null;
+    this.projectPanelView = null;
     this.markdownPanelView = null;
     this.pageView = null;
     this.uiView = null;
     this.feedbackPanelMounted = false;
     this.mcpPanelMounted = false;
+    this.projectPanelMounted = false;
     this.markdownPanelMounted = false;
     this.window = null;
   }

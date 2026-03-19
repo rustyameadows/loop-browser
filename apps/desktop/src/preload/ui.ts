@@ -1,5 +1,8 @@
 import { clipboard, contextBridge, ipcRenderer } from 'electron';
 import {
+  CHROME_APPEARANCE_COMMAND_CHANNEL,
+  CHROME_APPEARANCE_GET_STATE_CHANNEL,
+  CHROME_APPEARANCE_STATE_CHANNEL,
   FEEDBACK_COMMAND_CHANNEL,
   FEEDBACK_GET_STATE_CHANNEL,
   FEEDBACK_STATE_CHANNEL,
@@ -15,6 +18,8 @@ import {
   PICKER_COMMAND_CHANNEL,
   PICKER_GET_STATE_CHANNEL,
   PICKER_STATE_CHANNEL,
+  type ChromeAppearanceCommand,
+  type ChromeAppearanceState,
   type FeedbackCommand,
   type FeedbackState,
   type McpViewCommand,
@@ -94,6 +99,25 @@ const navigationBridge: NavigationBridge = {
     ipcRenderer.on(MCP_VIEW_STATE_CHANNEL, wrapped);
     return () => {
       ipcRenderer.removeListener(MCP_VIEW_STATE_CHANNEL, wrapped);
+    };
+  },
+  executeChromeAppearance(command: ChromeAppearanceCommand): Promise<ChromeAppearanceState> {
+    return ipcRenderer.invoke(
+      CHROME_APPEARANCE_COMMAND_CHANNEL,
+      command,
+    ) as Promise<ChromeAppearanceState>;
+  },
+  getChromeAppearanceState(): Promise<ChromeAppearanceState> {
+    return ipcRenderer.invoke(CHROME_APPEARANCE_GET_STATE_CHANNEL) as Promise<ChromeAppearanceState>;
+  },
+  subscribeChromeAppearance(listener: (state: ChromeAppearanceState) => void): () => void {
+    const wrapped = (_event: Electron.IpcRendererEvent, state: ChromeAppearanceState): void => {
+      listener(state);
+    };
+
+    ipcRenderer.on(CHROME_APPEARANCE_STATE_CHANNEL, wrapped);
+    return () => {
+      ipcRenderer.removeListener(CHROME_APPEARANCE_STATE_CHANNEL, wrapped);
     };
   },
   executeFeedback(command: FeedbackCommand): Promise<FeedbackState> {

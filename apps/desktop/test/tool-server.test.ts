@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  createEmptyChromeAppearanceState,
   createEmptyFeedbackState,
   createEmptyMarkdownViewState,
   createEmptyNavigationState,
@@ -28,6 +29,11 @@ describe('ToolServer', () => {
     let lastNavigationAction: string | null = null;
     let lastNavigationTarget: string | null = null;
     let lastResizeTarget: { width: number; height: number; target?: string } | null = null;
+    let chromeAppearanceState = {
+      ...createEmptyChromeAppearanceState(),
+      projectRoot: '/tmp/project',
+      configPath: '/tmp/project/.loop-browser.json',
+    };
     let screenshotCounter = 0;
     const currentPickerState = {
       ...createEmptyPickerState(),
@@ -84,6 +90,32 @@ describe('ToolServer', () => {
           enabled: command.action === 'enable',
         }),
         getPickerState: () => currentPickerState,
+        executeChromeAppearanceCommand: async (command) => {
+          switch (command.action) {
+            case 'set':
+              chromeAppearanceState = {
+                ...chromeAppearanceState,
+                chromeColor: command.chromeColor ?? chromeAppearanceState.chromeColor,
+                accentColor: command.accentColor ?? chromeAppearanceState.accentColor,
+                projectIconPath: command.projectIconPath ?? chromeAppearanceState.projectIconPath,
+              };
+              break;
+            case 'reset':
+              chromeAppearanceState = {
+                ...chromeAppearanceState,
+                chromeColor: createEmptyChromeAppearanceState().chromeColor,
+                accentColor: createEmptyChromeAppearanceState().accentColor,
+                projectIconPath: '',
+                resolvedProjectIconPath: null,
+              };
+              break;
+            default:
+              break;
+          }
+
+          return chromeAppearanceState;
+        },
+        getChromeAppearanceState: () => chromeAppearanceState,
         executeFeedbackCommand: async (command) => {
           switch (command.action) {
             case 'startDraftFromSelection':
@@ -238,6 +270,7 @@ describe('ToolServer', () => {
     const connection = await server.start();
     expect(server.getDiagnostics().lifecycle).toBe('listening');
     expect(server.getDiagnostics().tools).toContain('page.viewAsMarkdown');
+    expect(server.getDiagnostics().tools).toContain('chrome.getAppearance');
 
     const unauthorized = await fetch(connection.url, {
       method: 'POST',
@@ -461,6 +494,68 @@ describe('ToolServer', () => {
       feedbackProgressPayload.result.structuredContent.annotation.replies.at(-1)?.body,
     ).toBe('Agent marked this complete.');
     expect(feedbackProgressPayload.result.structuredContent.agentActivity.phase).toBe('done');
+
+    const chromeAppearanceResponse = await fetch(connection.url, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${connection.token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'chrome-get',
+        method: 'tools/call',
+        params: {
+          name: 'chrome.getAppearance',
+          arguments: {},
+        },
+      }),
+    });
+
+    const chromeAppearancePayload = (await chromeAppearanceResponse.json()) as {
+      result: {
+        structuredContent: {
+          appearance: {
+            chromeColor: string;
+          };
+        };
+      };
+    };
+    expect(chromeAppearanceResponse.status).toBe(200);
+    expect(chromeAppearancePayload.result.structuredContent.appearance.chromeColor).toBe(
+      '#FAFBFD',
+    );
+
+    const chromeSetResponse = await fetch(connection.url, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${connection.token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'chrome-set',
+        method: 'tools/call',
+        params: {
+          name: 'chrome.setAppearance',
+          arguments: {
+            accentColor: '#112233',
+          },
+        },
+      }),
+    });
+
+    const chromeSetPayload = (await chromeSetResponse.json()) as {
+      result: {
+        structuredContent: {
+          appearance: {
+            accentColor: string;
+          };
+        };
+      };
+    };
+    expect(chromeSetResponse.status).toBe(200);
+    expect(chromeSetPayload.result.structuredContent.appearance.accentColor).toBe('#112233');
 
     const navigateResponse = await fetch(connection.url, {
       method: 'POST',
@@ -838,6 +933,8 @@ describe('ToolServer', () => {
         executeNavigationCommand: async () => createEmptyNavigationState(),
         executePickerCommand: async () => createEmptyPickerState(),
         getPickerState: () => createEmptyPickerState(),
+        executeChromeAppearanceCommand: async () => createEmptyChromeAppearanceState(),
+        getChromeAppearanceState: () => createEmptyChromeAppearanceState(),
         executeFeedbackCommand: async () => createEmptyFeedbackState(),
         getFeedbackState: () => createEmptyFeedbackState(),
         getMarkdownForCurrentPage: async () => createEmptyMarkdownViewState(),
@@ -905,6 +1002,8 @@ describe('ToolServer', () => {
         },
         executePickerCommand: async () => createEmptyPickerState(),
         getPickerState: () => createEmptyPickerState(),
+        executeChromeAppearanceCommand: async () => createEmptyChromeAppearanceState(),
+        getChromeAppearanceState: () => createEmptyChromeAppearanceState(),
         executeFeedbackCommand: async () => createEmptyFeedbackState(),
         getFeedbackState: () => createEmptyFeedbackState(),
         getMarkdownForCurrentPage: async () => createEmptyMarkdownViewState(),

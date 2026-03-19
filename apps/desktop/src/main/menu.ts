@@ -90,6 +90,16 @@ export const installAppMenu = (browserShell: BrowserShell): void => {
 
   template.push(
     {
+      label: 'File',
+      submenu: [
+        {
+          label: 'Open Project Folder...',
+          accelerator: 'CmdOrCtrl+Shift+O',
+          click: () => browserShell.selectProjectFolder(),
+        },
+      ],
+    },
+    {
       label: 'Edit',
       submenu: editSubmenu,
     },

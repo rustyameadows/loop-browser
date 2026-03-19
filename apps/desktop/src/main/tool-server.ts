@@ -5,6 +5,8 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import type {
   ArtifactRecord,
+  ChromeAppearanceCommand,
+  ChromeAppearanceState,
   FeedbackCommand,
   FeedbackStatus,
   FeedbackState,
@@ -64,6 +66,8 @@ export interface ToolServerRuntime {
   executeNavigationCommand(command: NavigationCommand): Promise<NavigationState>;
   executePickerCommand(command: PickerCommand): Promise<PickerState>;
   getPickerState(): PickerState;
+  executeChromeAppearanceCommand(command: ChromeAppearanceCommand): Promise<ChromeAppearanceState>;
+  getChromeAppearanceState(): ChromeAppearanceState;
   executeFeedbackCommand(command: FeedbackCommand): Promise<FeedbackState>;
   getFeedbackState(): FeedbackState;
   getMarkdownForCurrentPage(forceRefresh?: boolean): Promise<MarkdownViewState>;
@@ -173,6 +177,37 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'picker.lastSelection',
     description: 'Return the last element descriptor selected through pick mode.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'chrome.getAppearance',
+    description: 'Return the current project chrome appearance settings.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'chrome.setAppearance',
+    description: 'Update project chrome appearance settings and persist them to project config.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        chromeColor: { type: 'string' },
+        accentColor: { type: 'string' },
+        projectIconPath: { type: 'string' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'chrome.resetAppearance',
+    description: 'Reset project chrome appearance settings to defaults and persist them.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -952,6 +987,37 @@ export class ToolServer {
       case 'picker.lastSelection':
         return toolResult({
           picker: this.runtime.getPickerState(),
+        });
+      case 'chrome.getAppearance':
+        return toolResult({
+          appearance: this.runtime.getChromeAppearanceState(),
+        });
+      case 'chrome.setAppearance': {
+        if (
+          typeof args.chromeColor !== 'string' &&
+          typeof args.accentColor !== 'string' &&
+          typeof args.projectIconPath !== 'string'
+        ) {
+          throw new Error(
+            'chrome.setAppearance requires at least one of chromeColor, accentColor, or projectIconPath.',
+          );
+        }
+
+        return toolResult({
+          appearance: await this.runtime.executeChromeAppearanceCommand({
+            action: 'set',
+            chromeColor: typeof args.chromeColor === 'string' ? args.chromeColor : undefined,
+            accentColor: typeof args.accentColor === 'string' ? args.accentColor : undefined,
+            projectIconPath:
+              typeof args.projectIconPath === 'string' ? args.projectIconPath : undefined,
+          }),
+        });
+      }
+      case 'chrome.resetAppearance':
+        return toolResult({
+          appearance: await this.runtime.executeChromeAppearanceCommand({
+            action: 'reset',
+          }),
         });
       case 'feedback.getState':
         return toolResult({

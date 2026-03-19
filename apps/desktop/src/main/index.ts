@@ -1,19 +1,29 @@
+import path from 'node:path';
 import { app } from 'electron';
 import { BrowserShell } from './browser-shell';
 import { installAppMenu } from './menu';
+import {
+  PROJECT_SELECTION_FILE_NAME,
+  ProjectAppearanceController,
+} from './project-appearance';
 import { resolveRuntimeConfig } from './runtime-config';
 import { ToolServer } from './tool-server';
 
 app.setName('Loop Browser');
 
 const runtimeConfig = resolveRuntimeConfig(process.env);
-
 if (runtimeConfig.userDataDir) {
   app.setPath('userData', runtimeConfig.userDataDir);
 }
 
+const projectAppearanceStore = new ProjectAppearanceController(
+  path.join(app.getPath('userData'), PROJECT_SELECTION_FILE_NAME),
+  runtimeConfig.projectRoot,
+);
+
 const browserShell = new BrowserShell({
   initialUrl: runtimeConfig.startUrl ?? undefined,
+  projectAppearance: projectAppearanceStore,
 });
 const toolServer = new ToolServer({
   runtime: browserShell,
@@ -57,5 +67,6 @@ app.on('before-quit', () => {
     toolServer.reportLifecycleError(message);
     console.error('Failed to stop Loop Browser tool server cleanly.', error);
   });
+  projectAppearanceStore.dispose();
   browserShell.dispose();
 });

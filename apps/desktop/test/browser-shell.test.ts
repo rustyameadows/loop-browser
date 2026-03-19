@@ -1,19 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  createEmptyChromeAppearanceState,
   createEmptyFeedbackState,
   createEmptyMarkdownViewState,
   createEmptyMcpViewState,
 } from '@agent-browser/protocol';
+import { dialog } from 'electron';
 
 vi.mock('electron', () => ({
   BaseWindow: class {},
   WebContentsView: class {},
   app: {
     getAppPath: () => '/tmp/app',
+    getPath: () => '/tmp/user-data',
     isPackaged: false,
   },
   desktopCapturer: {
     getSources: vi.fn(async () => []),
+  },
+  dialog: {
+    showOpenDialog: vi.fn(async () => ({
+      canceled: true,
+      filePaths: [],
+    })),
   },
   ipcMain: {
     removeHandler: vi.fn(),
@@ -28,6 +37,11 @@ vi.mock('electron', () => ({
   },
   shell: {
     openExternal: vi.fn(),
+  },
+  nativeImage: {
+    createFromBuffer: vi.fn(() => ({
+      isEmpty: () => false,
+    })),
   },
 }));
 
@@ -48,6 +62,52 @@ const createFakePanelView = () => ({
     },
   },
 });
+
+const createProjectAppearanceRuntime = () => {
+  let state = {
+    ...createEmptyChromeAppearanceState(),
+    projectRoot: '/tmp/project',
+    configPath: '/tmp/project/.loop-browser.json',
+  };
+
+  return {
+    getState: () => state,
+    subscribe: () => () => undefined,
+    selectProject: async (projectRoot: string | null) => {
+      state = {
+        ...createEmptyChromeAppearanceState(),
+        projectRoot: projectRoot ?? '',
+        configPath: projectRoot ? `${projectRoot}/.loop-browser.json` : '',
+      };
+      return state;
+    },
+    setAppearance: async (update: {
+      chromeColor?: string;
+      accentColor?: string;
+      projectIconPath?: string;
+    }) => {
+      state = {
+        ...state,
+        chromeColor: update.chromeColor ?? state.chromeColor,
+        accentColor: update.accentColor ?? state.accentColor,
+        projectIconPath: update.projectIconPath ?? state.projectIconPath,
+      };
+      return state;
+    },
+    resetAppearance: async () => {
+      state = {
+        ...state,
+        chromeColor: createEmptyChromeAppearanceState().chromeColor,
+        accentColor: createEmptyChromeAppearanceState().accentColor,
+        projectIconPath: '',
+        resolvedProjectIconPath: null,
+        lastError: null,
+      };
+      return state;
+    },
+    dispose: () => undefined,
+  };
+};
 
 type BrowserShellHarness = {
   window: {
@@ -79,7 +139,9 @@ describe('BrowserShell', () => {
   });
 
   it('maps attached MCP diagnostics into trusted UI state', () => {
-    const shell = new BrowserShell();
+    const shell = new BrowserShell({
+      projectAppearance: createProjectAppearanceRuntime(),
+    });
     const subscribe = vi.fn();
 
     shell.attachMcpDiagnostics({
@@ -162,7 +224,9 @@ describe('BrowserShell', () => {
   });
 
   it('keeps Markdown and MCP panels mutually exclusive', async () => {
-    const shell = new BrowserShell();
+    const shell = new BrowserShell({
+      projectAppearance: createProjectAppearanceRuntime(),
+    });
     const subject = shell as unknown as BrowserShellHarness;
 
     subject.window = {
@@ -209,7 +273,9 @@ describe('BrowserShell', () => {
   });
 
   it('emits a page overlay payload for the active agent annotation on the current page', () => {
-    const shell = new BrowserShell();
+    const shell = new BrowserShell({
+      projectAppearance: createProjectAppearanceRuntime(),
+    });
     const subject = shell as unknown as BrowserShellHarness;
     const pageView = createFakePanelView();
 
@@ -283,5 +349,73 @@ describe('BrowserShell', () => {
         message: 'Agent is working on this.',
       }),
     );
+  });
+
+  it('applies chrome appearance changes through the project runtime', async () => {
+    const shell = new BrowserShell({
+      projectAppearance: createProjectAppearanceRuntime(),
+    });
+    const subject = shell as unknown as BrowserShellHarness & {
+      window: {
+        setBackgroundColor: ReturnType<typeof vi.fn>;
+        isDestroyed: () => boolean;
+      } | null;
+    };
+
+    subject.window = {
+      contentView: {
+        addChildView: vi.fn(),
+        removeChildView: vi.fn(),
+      },
+      setBackgroundColor: vi.fn(),
+      isDestroyed: () => false,
+    };
+
+    const state = await shell.executeChromeAppearanceCommand({
+      action: 'set',
+      chromeColor: '#112233',
+    });
+
+    expect(state.chromeColor).toBe('#112233');
+    expect(subject.window?.setBackgroundColor).toHaveBeenCalledWith('#112233');
+  });
+
+  it('switches the selected project folder through the chrome appearance command', async () => {
+    vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({
+      canceled: false,
+      filePaths: ['/tmp/client-project'],
+    });
+
+    const shell = new BrowserShell({
+      projectAppearance: createProjectAppearanceRuntime(),
+    });
+    const subject = shell as unknown as BrowserShellHarness & {
+      window: {
+        contentView: {
+          addChildView: ReturnType<typeof vi.fn>;
+          removeChildView: ReturnType<typeof vi.fn>;
+        };
+        setBackgroundColor: ReturnType<typeof vi.fn>;
+        isDestroyed: () => boolean;
+        focus: ReturnType<typeof vi.fn>;
+      } | null;
+    };
+
+    subject.window = {
+      contentView: {
+        addChildView: vi.fn(),
+        removeChildView: vi.fn(),
+      },
+      setBackgroundColor: vi.fn(),
+      isDestroyed: () => false,
+      focus: vi.fn(),
+    };
+
+    const state = await shell.executeChromeAppearanceCommand({
+      action: 'selectProject',
+    });
+
+    expect(state.projectRoot).toBe('/tmp/client-project');
+    expect(state.configPath).toBe('/tmp/client-project/.loop-browser.json');
   });
 });

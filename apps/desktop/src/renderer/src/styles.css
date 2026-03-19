@@ -20,6 +20,7 @@
   --muted-strong: #4d535c;
   --blue: #0a84ff;
   --blue-soft: #e8f2ff;
+  --accent-rgb: 10, 132, 255;
   --error-bg: #fff2f1;
   --error-border: #efc8c5;
   --error-text: #ba4b44;
@@ -48,7 +49,10 @@ input {
 
 #root,
 .shell,
-.markdownSurface {
+.markdownSurface,
+.feedbackSurface,
+.mcpSurface,
+.projectSurface {
   height: 100%;
 }
 
@@ -70,10 +74,15 @@ input {
 .shell__panel--busy {
   background:
     linear-gradient(180deg, rgba(232, 244, 255, 0.98), rgba(238, 245, 255, 0.94) 46%, var(--chrome-bg-bottom)),
-    linear-gradient(90deg, rgba(10, 132, 255, 0.08), transparent 48%, rgba(10, 132, 255, 0.12));
+    linear-gradient(
+      90deg,
+      rgba(var(--accent-rgb), 0.08),
+      transparent 48%,
+      rgba(var(--accent-rgb), 0.12)
+    );
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.94),
-    inset 0 6px 26px rgba(10, 132, 255, 0.08);
+    inset 0 6px 26px rgba(var(--accent-rgb), 0.08);
 }
 
 .shell__panel--done {
@@ -100,6 +109,7 @@ input {
 .shell__omniboxInput,
 .markdownSurface__iconButton,
 .markdownSurface__actionButton,
+.projectSurface__iconButton,
 .feedbackSurface__iconButton,
 button,
 input,
@@ -189,7 +199,7 @@ a {
 }
 
 .shell__tab--loading {
-  border-color: rgba(10, 132, 255, 0.28);
+  border-color: rgba(var(--accent-rgb), 0.28);
 }
 
 .shell__tabIndicator {
@@ -201,7 +211,7 @@ a {
 
 .shell__tabIndicator--loading {
   background: var(--blue);
-  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.15);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.15);
   animation: shell-pulse 1.35s ease-in-out infinite;
 }
 
@@ -219,16 +229,17 @@ a {
 .shell__utility--pill {
   height: 34px;
   padding: 0 14px;
-  border: 1px solid #cfe0ff;
+  border: 1px solid rgba(var(--accent-rgb), 0.2);
   border-radius: 999px;
   background: var(--blue-soft);
-  color: #2567c7;
+  color: var(--blue);
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
 }
 
 .shell__profileStub {
+  overflow: hidden;
   width: 32px;
   height: 32px;
   border-radius: 999px;
@@ -236,6 +247,12 @@ a {
   color: var(--muted-strong);
   font-size: 11px;
   font-weight: 700;
+}
+
+.shell__profileImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .shell__toolbar {
@@ -268,18 +285,18 @@ a {
 }
 
 .shell__navButton--picker {
-  color: #2567c7;
-  border-color: #cfe0ff;
+  color: var(--blue);
+  border-color: rgba(var(--accent-rgb), 0.2);
   background: linear-gradient(180deg, #f9fbff, #edf5ff);
 }
 
 .shell__navButton--pickerActive {
-  color: #0d63c9;
-  border-color: rgba(10, 132, 255, 0.45);
+  color: var(--blue);
+  border-color: rgba(var(--accent-rgb), 0.45);
   background: linear-gradient(180deg, #eef6ff, #dcecff);
   box-shadow:
     var(--shadow),
-    0 0 0 3px rgba(10, 132, 255, 0.1);
+    0 0 0 3px rgba(var(--accent-rgb), 0.1);
 }
 
 .shell__omnibox {
@@ -299,10 +316,10 @@ a {
 }
 
 .shell__omniboxFrame:focus-within {
-  border-color: rgba(10, 132, 255, 0.42);
+  border-color: rgba(var(--accent-rgb), 0.42);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.92),
-    0 0 0 3px rgba(10, 132, 255, 0.12);
+    0 0 0 3px rgba(var(--accent-rgb), 0.12);
 }
 
 .shell__omniboxIcon {
@@ -330,10 +347,10 @@ a {
 .shell__goButton {
   width: 38px;
   height: 38px;
-  border: 1px solid #cfe0ff;
+  border: 1px solid rgba(var(--accent-rgb), 0.2);
   border-radius: 14px;
   background: linear-gradient(180deg, #f9fbff, #eaf3ff);
-  color: #2567c7;
+  color: var(--blue);
   box-shadow: var(--shadow);
 }
 
@@ -376,7 +393,7 @@ a {
 }
 
 .shell__selectionBar--armed {
-  border-color: rgba(10, 132, 255, 0.32);
+  border-color: rgba(var(--accent-rgb), 0.32);
   background: rgba(232, 242, 255, 0.9);
 }
 
@@ -420,10 +437,10 @@ a {
   gap: 8px;
   min-height: 28px;
   padding: 0 11px;
-  border: 1px solid #cfe0ff;
+  border: 1px solid rgba(var(--accent-rgb), 0.2);
   border-radius: 999px;
   background: #ffffff;
-  color: #2567c7;
+  color: var(--blue);
   font-size: 12px;
   font-weight: 600;
 }
@@ -481,9 +498,9 @@ a {
 }
 
 .shell__pillButton--mdActive {
-  border-color: rgba(10, 132, 255, 0.42);
+  border-color: rgba(var(--accent-rgb), 0.42);
   background: linear-gradient(180deg, #eef6ff, #dcecff);
-  color: #114f9b;
+  color: var(--blue);
 }
 
 .shell__pillButton--mcp {
@@ -494,18 +511,31 @@ a {
 }
 
 .shell__pillButton--mcpActive {
-  border-color: rgba(10, 132, 255, 0.32);
+  border-color: rgba(var(--accent-rgb), 0.32);
   background: linear-gradient(180deg, #f5f9ff, #e8f1ff);
   color: #164e97;
 }
 
 .shell__pillButton--mcpBusy {
-  border-color: rgba(10, 132, 255, 0.4);
+  border-color: rgba(var(--accent-rgb), 0.4);
   background: linear-gradient(180deg, #ecf5ff, #dbeaff);
   color: #0f5ab1;
   box-shadow:
     var(--shadow),
-    0 0 0 3px rgba(10, 132, 255, 0.1);
+    0 0 0 3px rgba(var(--accent-rgb), 0.1);
+}
+
+.shell__pillButton--project {
+  min-height: 34px;
+  padding: 0 13px;
+  background: linear-gradient(180deg, #f8fbff, var(--blue-soft));
+}
+
+.shell__pillButton--projectActive {
+  border-color: rgba(var(--accent-rgb), 0.42);
+  box-shadow:
+    var(--shadow),
+    0 0 0 3px rgba(var(--accent-rgb), 0.1);
 }
 
 .shell__pillButton--mcpDone {
@@ -612,7 +642,7 @@ a {
 
 .shell__panel--busy .shell__tab--active,
 .shell__panel--busy .shell__selectionBar {
-  border-color: rgba(10, 132, 255, 0.24);
+  border-color: rgba(var(--accent-rgb), 0.24);
 }
 
 .shell__panel--busy .shell__selectionBar {
@@ -634,6 +664,273 @@ a {
 
 .shell__panel--done .shell__diagnostic {
   color: #15764f;
+}
+
+.projectSurface {
+  background: linear-gradient(180deg, var(--chrome-bg-top), var(--chrome-bg-bottom));
+  border-left: 1px solid rgba(214, 220, 229, 0.96);
+  box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.82);
+}
+
+.projectSurface__panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 12px;
+  height: 100%;
+  padding: 18px 18px 16px;
+}
+
+.projectSurface__header,
+.projectSurface__sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.projectSurface__eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--blue);
+}
+
+.projectSurface__iconButton {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--muted-strong);
+  box-shadow: var(--shadow);
+}
+
+.projectSurface__hero,
+.projectSurface__section,
+.projectSurface__metaCard,
+.projectSurface__preview {
+  border: 1px solid rgba(215, 220, 228, 0.92);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94);
+}
+
+.projectSurface__hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+}
+
+.projectSurface__title {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: #171726;
+}
+
+.projectSurface__subtitle {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.projectSurface__heroMeta {
+  display: flex;
+  gap: 10px;
+}
+
+.projectSurface__swatch {
+  width: 42px;
+  height: 42px;
+  border: 1px solid rgba(15, 23, 36, 0.08);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+
+.projectSurface__swatch--accent {
+  border-radius: 999px;
+}
+
+.projectSurface__body {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+  padding-right: 2px;
+}
+
+.projectSurface__section {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.projectSurface__sectionTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.projectSurface__sectionMeta,
+.projectSurface__metaLabel,
+.projectSurface__previewMeta {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.projectSurface__metaCard {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+}
+
+.projectSurface__empty {
+  padding: 12px 14px;
+  border: 1px dashed rgba(209, 215, 224, 0.95);
+  border-radius: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.projectSurface__metaValue {
+  color: #111827;
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.projectSurface__field {
+  display: grid;
+  gap: 6px;
+}
+
+.projectSurface__fieldLabel {
+  color: #5d6573;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.projectSurface__input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid rgba(213, 219, 228, 0.95);
+  border-radius: 14px;
+  background: #fff;
+  color: #111827;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+.projectSurface__input:disabled {
+  color: #8a92a0;
+  background: rgba(246, 248, 251, 0.9);
+}
+
+.projectSurface__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.projectSurface__preview {
+  display: grid;
+  gap: 12px;
+  overflow: hidden;
+  padding: 14px;
+}
+
+.projectSurface__previewBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.projectSurface__previewPill {
+  width: 44px;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(17, 24, 39, 0.08);
+}
+
+.projectSurface__previewTitle {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.projectSurface__previewAccent {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+}
+
+.projectSurface__previewBody {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.projectSurface__previewIconWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: var(--shadow);
+}
+
+.projectSurface__previewIcon,
+.projectSurface__previewIconFallback {
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+}
+
+.projectSurface__previewIcon {
+  object-fit: cover;
+}
+
+.projectSurface__previewIconFallback {
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.projectSurface__previewCopy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.projectSurface__previewHeading {
+  font-size: 13px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.projectSurface__error {
+  padding: 10px 12px;
+  border: 1px solid var(--error-border);
+  border-radius: 14px;
+  background: var(--error-bg);
+  color: var(--error-text);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .markdownSurface {
@@ -1295,11 +1592,11 @@ a {
 @keyframes shell-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.12);
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.12);
   }
 
   50% {
-    box-shadow: 0 0 0 5px rgba(10, 132, 255, 0.2);
+    box-shadow: 0 0 0 5px rgba(var(--accent-rgb), 0.2);
   }
 }
 

@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent, type JSX, type SVGProps } from 'react';
 import {
+  createEmptyChromeAppearanceState,
   createEmptyFeedbackState,
   createEmptyMcpViewState,
   createEmptyMarkdownViewState,
   createEmptyNavigationState,
   createEmptyPickerState,
+  type ChromeAppearanceCommand,
+  type ChromeAppearanceState,
   type ElementDescriptor,
   type FeedbackAnnotation,
   type FeedbackCommand,
@@ -20,8 +23,13 @@ import {
   type PickerCommand,
   type PickerState,
 } from '@agent-browser/protocol';
+import {
+  getChromeAppearanceCssVariables,
+  projectIconSrc,
+} from './chrome-appearance-theme';
 
 const emptyState = createEmptyNavigationState();
+const emptyChromeAppearanceState = createEmptyChromeAppearanceState();
 const emptyPickerState = createEmptyPickerState();
 const emptyFeedbackState = createEmptyFeedbackState();
 const emptyMarkdownState = createEmptyMarkdownViewState();
@@ -29,7 +37,7 @@ const emptyMcpState = createEmptyMcpViewState();
 const stubTabs = ['Agent Chat', 'Inspector'];
 const AGENT_DONE_PULSE_MS = 1600;
 
-type SurfaceMode = 'chrome' | 'markdown' | 'mcp' | 'feedback';
+type SurfaceMode = 'chrome' | 'markdown' | 'mcp' | 'feedback' | 'project';
 
 type IconName =
   | 'arrowUpRight'
@@ -58,6 +66,10 @@ const getSurfaceMode = (): SurfaceMode => {
 
   if (params.get('surface') === 'feedback') {
     return 'feedback';
+  }
+
+  if (params.get('surface') === 'project') {
+    return 'project';
   }
 
   return 'chrome';
@@ -630,6 +642,41 @@ const useMcpViewState = (): McpViewState => {
   return mcpViewState;
 };
 
+const useChromeAppearanceState = (): ChromeAppearanceState => {
+  const [chromeAppearanceState, setChromeAppearanceState] =
+    useState<ChromeAppearanceState>(emptyChromeAppearanceState);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const syncInitialChromeAppearanceState = async (): Promise<void> => {
+      const initialState = await window.agentBrowser.getChromeAppearanceState();
+      if (!isMounted) {
+        return;
+      }
+
+      setChromeAppearanceState(initialState);
+    };
+
+    void syncInitialChromeAppearanceState();
+
+    const unsubscribe = window.agentBrowser.subscribeChromeAppearance((nextState) => {
+      if (!isMounted) {
+        return;
+      }
+
+      setChromeAppearanceState(nextState);
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, []);
+
+  return chromeAppearanceState;
+};
+
 const useMcpPresence = (
   mcpViewState: McpViewState,
 ): {
@@ -676,7 +723,11 @@ const useMcpPresence = (
   };
 };
 
-const ChromeSurface = (): JSX.Element => {
+const ChromeSurface = ({
+  chromeAppearanceState,
+}: {
+  chromeAppearanceState: ChromeAppearanceState;
+}): JSX.Element => {
   const navigationState = useNavigationState();
   const pickerState = usePickerState();
   const feedbackState = useFeedbackState();
@@ -721,6 +772,10 @@ const ChromeSurface = (): JSX.Element => {
 
   const runMcpCommand = async (command: McpViewCommand): Promise<void> => {
     await window.agentBrowser.executeMcpView(command);
+  };
+
+  const runChromeAppearanceCommand = async (command: ChromeAppearanceCommand): Promise<void> => {
+    await window.agentBrowser.executeChromeAppearance(command);
   };
 
   const runFeedbackCommand = async (command: FeedbackCommand): Promise<void> => {
@@ -795,6 +850,7 @@ const ChromeSurface = (): JSX.Element => {
     : mcpPresence.isDonePulse
       ? `Agent update complete${mcpPresence.message ? `: ${mcpPresence.message}` : ''}`
       : `MCP status: ${mcpViewState.statusLabel}`;
+  const currentProjectIconSrc = projectIconSrc(chromeAppearanceState.resolvedProjectIconPath);
 
   return (
     <main className="shell">
@@ -841,7 +897,15 @@ const ChromeSurface = (): JSX.Element => {
               Ask Agent
             </div>
             <div aria-hidden="true" className="shell__profileStub">
-              AB
+              {currentProjectIconSrc ? (
+                <img
+                  alt=""
+                  className="shell__profileImage"
+                  src={currentProjectIconSrc}
+                />
+              ) : (
+                'LB'
+              )}
             </div>
           </div>
         </div>
@@ -912,6 +976,24 @@ const ChromeSurface = (): JSX.Element => {
               type="button"
             >
               <ChromeIcon className="shell__icon" name="crosshair" />
+            </button>
+            <button
+              aria-label={
+                chromeAppearanceState.isOpen ? 'Close project style' : 'Open project style'
+              }
+              aria-pressed={chromeAppearanceState.isOpen}
+              className={`shell__pillButton shell__pillButton--project${
+                chromeAppearanceState.isOpen ? ' shell__pillButton--projectActive' : ''
+              }`}
+              onClick={() =>
+                void runChromeAppearanceCommand({
+                  action: chromeAppearanceState.isOpen ? 'close' : 'open',
+                })
+              }
+              type="button"
+            >
+              <ChromeIcon className="shell__icon" name="sliders" />
+              <span>Project Style</span>
             </button>
             <button
               aria-label={
@@ -1327,6 +1409,251 @@ const McpSurface = (): JSX.Element => {
   );
 };
 
+const ProjectSurface = ({
+  chromeAppearanceState,
+}: {
+  chromeAppearanceState: ChromeAppearanceState;
+}): JSX.Element => {
+  const hasProject = chromeAppearanceState.projectRoot.trim().length > 0;
+  const [chromeColorDraft, setChromeColorDraft] = useState(chromeAppearanceState.chromeColor);
+  const [accentColorDraft, setAccentColorDraft] = useState(chromeAppearanceState.accentColor);
+  const [projectIconPathDraft, setProjectIconPathDraft] = useState(
+    chromeAppearanceState.projectIconPath,
+  );
+  const projectIconPreviewSrc = projectIconSrc(chromeAppearanceState.resolvedProjectIconPath);
+
+  useEffect(() => {
+    setChromeColorDraft(chromeAppearanceState.chromeColor);
+    setAccentColorDraft(chromeAppearanceState.accentColor);
+    setProjectIconPathDraft(chromeAppearanceState.projectIconPath);
+  }, [
+    chromeAppearanceState.chromeColor,
+    chromeAppearanceState.accentColor,
+    chromeAppearanceState.projectIconPath,
+  ]);
+
+  const runChromeAppearanceCommand = async (command: ChromeAppearanceCommand): Promise<void> => {
+    await window.agentBrowser.executeChromeAppearance(command);
+  };
+
+  const handleSave = async (): Promise<void> => {
+    if (!hasProject) {
+      return;
+    }
+
+    await runChromeAppearanceCommand({
+      action: 'set',
+      chromeColor: chromeColorDraft,
+      accentColor: accentColorDraft,
+      projectIconPath: projectIconPathDraft,
+    });
+  };
+
+  const handleReset = async (): Promise<void> => {
+    if (!hasProject) {
+      return;
+    }
+
+    await runChromeAppearanceCommand({ action: 'reset' });
+  };
+
+  return (
+    <main className="projectSurface">
+      <section className="projectSurface__panel">
+        <header className="projectSurface__header">
+          <div className="projectSurface__eyebrow">Project Style</div>
+          <button
+            aria-label="Close project style"
+            className="projectSurface__iconButton"
+            onClick={() => void runChromeAppearanceCommand({ action: 'close' })}
+            type="button"
+          >
+            <ChromeIcon className="shell__icon" name="close" />
+          </button>
+        </header>
+
+        <section className="projectSurface__hero">
+          <div>
+            <div className="projectSurface__title">Style this project and keep it distinct.</div>
+            <div className="projectSurface__subtitle">
+              Choose a project folder, then Loop Browser will read and write
+              <code> .loop-browser.json </code>
+              there and use that file to control the chrome.
+            </div>
+          </div>
+          <div className="projectSurface__heroMeta">
+            <div
+              className="projectSurface__swatch"
+              style={{ backgroundColor: chromeAppearanceState.chromeColor }}
+            />
+            <div
+              className="projectSurface__swatch projectSurface__swatch--accent"
+              style={{ backgroundColor: chromeAppearanceState.accentColor }}
+            />
+          </div>
+        </section>
+
+        <div className="projectSurface__body">
+          <section className="projectSurface__section">
+            <div className="projectSurface__sectionHeader">
+              <div className="projectSurface__sectionTitle">Project</div>
+              <button
+                className="shell__pillButton shell__pillButton--muted"
+                onClick={() => void runChromeAppearanceCommand({ action: 'selectProject' })}
+                type="button"
+              >
+                {hasProject ? 'Change Folder' : 'Choose Folder'}
+              </button>
+            </div>
+            {hasProject ? (
+              <>
+                <div className="projectSurface__metaCard">
+                  <div className="projectSurface__metaLabel">Project root</div>
+                  <div className="projectSurface__metaValue">{chromeAppearanceState.projectRoot}</div>
+                </div>
+                <div className="projectSurface__metaCard">
+                  <div className="projectSurface__metaLabel">Config file</div>
+                  <div className="projectSurface__metaValue">{chromeAppearanceState.configPath}</div>
+                </div>
+                <div className="projectSurface__sectionMeta">
+                  Relative icon paths resolve from this project folder.
+                </div>
+              </>
+            ) : (
+              <div className="projectSurface__empty">
+                Choose a project folder first. Loop Browser will create or update
+                <code> .loop-browser.json </code>
+                inside that folder, and that file will control the app chrome.
+              </div>
+            )}
+            {chromeAppearanceState.lastError ? (
+              <div className="projectSurface__error">{chromeAppearanceState.lastError}</div>
+            ) : null}
+          </section>
+
+          <section className="projectSurface__section">
+            <div className="projectSurface__sectionHeader">
+              <div className="projectSurface__sectionTitle">Appearance</div>
+              <div className="projectSurface__sectionMeta">Hex colors only in v1</div>
+            </div>
+
+            <label className="projectSurface__field">
+              <span className="projectSurface__fieldLabel">Chrome color</span>
+              <input
+                className="projectSurface__input"
+                disabled={!hasProject}
+                onChange={(event) => setChromeColorDraft(event.target.value)}
+                placeholder="#FAFBFD"
+                spellCheck={false}
+                type="text"
+                value={chromeColorDraft}
+              />
+            </label>
+
+            <label className="projectSurface__field">
+              <span className="projectSurface__fieldLabel">Accent color</span>
+              <input
+                className="projectSurface__input"
+                disabled={!hasProject}
+                onChange={(event) => setAccentColorDraft(event.target.value)}
+                placeholder="#0A84FF"
+                spellCheck={false}
+                type="text"
+                value={accentColorDraft}
+              />
+            </label>
+
+            <label className="projectSurface__field">
+              <span className="projectSurface__fieldLabel">Project icon path</span>
+              <input
+                className="projectSurface__input"
+                disabled={!hasProject}
+                onChange={(event) => setProjectIconPathDraft(event.target.value)}
+                placeholder="./assets/project-icon.png"
+                spellCheck={false}
+                type="text"
+                value={projectIconPathDraft}
+              />
+            </label>
+
+            <div className="projectSurface__actions">
+              <button
+                className="shell__pillButton"
+                disabled={!hasProject}
+                onClick={() => void handleSave()}
+                type="button"
+              >
+                Save Style
+              </button>
+              <button
+                className="shell__pillButton shell__pillButton--muted"
+                disabled={!hasProject}
+                onClick={() => void handleReset()}
+                type="button"
+              >
+                Reset
+              </button>
+              <button
+                className="shell__pillButton shell__pillButton--muted"
+                onClick={() => void runChromeAppearanceCommand({ action: 'close' })}
+                type="button"
+              >
+                Close
+              </button>
+            </div>
+          </section>
+
+          <section className="projectSurface__section">
+            <div className="projectSurface__sectionHeader">
+              <div className="projectSurface__sectionTitle">Live preview</div>
+              <div className="projectSurface__sectionMeta">
+                Current applied style and project icon
+              </div>
+            </div>
+
+            <div className="projectSurface__preview" style={{ backgroundColor: chromeColorDraft }}>
+              <div className="projectSurface__previewBar">
+                <div className="projectSurface__previewPill" />
+                <div className="projectSurface__previewTitle">Loop Browser</div>
+                <div
+                  className="projectSurface__previewAccent"
+                  style={{ backgroundColor: accentColorDraft }}
+                />
+              </div>
+              <div className="projectSurface__previewBody">
+                <div className="projectSurface__previewIconWrap">
+                  {projectIconPreviewSrc ? (
+                    <img
+                      alt=""
+                      className="projectSurface__previewIcon"
+                      src={projectIconPreviewSrc}
+                    />
+                  ) : (
+                    <div
+                      className="projectSurface__previewIconFallback"
+                      style={{ backgroundColor: accentColorDraft }}
+                    >
+                      LB
+                    </div>
+                  )}
+                </div>
+                <div className="projectSurface__previewCopy">
+                  <div className="projectSurface__previewHeading">Project session</div>
+                  <div className="projectSurface__previewMeta">
+                    {hasProject
+                      ? chromeAppearanceState.projectIconPath || 'No project icon configured'
+                      : 'Choose a project folder to enable config-backed styling'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+  );
+};
+
 const FeedbackSurface = (): JSX.Element => {
   const feedbackState = useFeedbackState();
   const navigationState = useNavigationState();
@@ -1699,6 +2026,14 @@ const FeedbackSurface = (): JSX.Element => {
 
 export const App = (): JSX.Element => {
   const surfaceMode = getSurfaceMode();
+  const chromeAppearanceState = useChromeAppearanceState();
+
+  useEffect(() => {
+    const cssVariables = getChromeAppearanceCssVariables(chromeAppearanceState);
+    for (const [key, value] of Object.entries(cssVariables)) {
+      document.documentElement.style.setProperty(key, value);
+    }
+  }, [chromeAppearanceState]);
 
   if (surfaceMode === 'feedback') {
     return <FeedbackSurface />;
@@ -1712,5 +2047,9 @@ export const App = (): JSX.Element => {
     return <McpSurface />;
   }
 
-  return <ChromeSurface />;
+  if (surfaceMode === 'project') {
+    return <ProjectSurface chromeAppearanceState={chromeAppearanceState} />;
+  }
+
+  return <ChromeSurface chromeAppearanceState={chromeAppearanceState} />;
 };

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { access, mkdir, mkdtemp, readFile, rm, readdir } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -9,6 +9,9 @@ const EXPECTED_TOOLS = [
   'browser.listTabs',
   'browser.getWindowState',
   'browser.resizeWindow',
+  'chrome.getAppearance',
+  'chrome.setAppearance',
+  'chrome.resetAppearance',
   'page.navigate',
   'picker.enable',
   'picker.disable',
@@ -24,6 +27,10 @@ const LOG_LIMIT = 20_000
 const REGISTRATION_TIMEOUT_MS = 60_000
 const REQUEST_TIMEOUT_MS = 15_000
 const SHUTDOWN_TIMEOUT_MS = 10_000
+const SMOKE_CHROME_COLOR = '#EAF3FF'
+const SMOKE_ACCENT_COLOR = '#FF6B35'
+const UPDATED_ACCENT_COLOR = '#0A84FF'
+const SMOKE_PROJECT_ICON_FILE = 'project-icon.svg'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(scriptDir, '..')
@@ -120,6 +127,61 @@ const assertFileExists = async (filePath, message) => {
     await access(filePath)
   } catch {
     throw new Error(message)
+  }
+}
+
+const assertSamePath = async (actualPath, expectedPath, message) => {
+  const [resolvedActualPath, resolvedExpectedPath] = await Promise.all([
+    realpath(actualPath),
+    realpath(expectedPath),
+  ])
+
+  assert(resolvedActualPath === resolvedExpectedPath, message)
+}
+
+const writeSmokeProjectFixture = async (smokeDir) => {
+  const projectRoot = path.join(smokeDir, 'project')
+
+  await mkdir(projectRoot, { recursive: true })
+
+  const resolvedProjectRoot = await realpath(projectRoot)
+  const configPath = path.join(resolvedProjectRoot, '.loop-browser.json')
+  const projectIconPath = path.join(resolvedProjectRoot, SMOKE_PROJECT_ICON_FILE)
+
+  await writeFile(
+    projectIconPath,
+    [
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">',
+      '  <rect width="256" height="256" rx="48" fill="#18304F" />',
+      '  <circle cx="128" cy="112" r="54" fill="#FF6B35" />',
+      '  <path d="M74 176h108v22H74z" fill="#F6F9FF" />',
+      '</svg>',
+      '',
+    ].join('\n'),
+    'utf8',
+  )
+
+  await writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        chrome: {
+          chromeColor: SMOKE_CHROME_COLOR,
+          accentColor: SMOKE_ACCENT_COLOR,
+          projectIconPath: `./${SMOKE_PROJECT_ICON_FILE}`,
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  )
+
+  return {
+    projectRoot: resolvedProjectRoot,
+    configPath,
+    projectIconPath,
   }
 }
 
@@ -238,9 +300,9 @@ const findPackagedBinary = async () => {
   )
 }
 
-const spawnApp = async (mode, env, state) => {
+const spawnApp = async (mode, env, cwd, state) => {
   const spawnOptions = {
-    cwd: repoRoot,
+    cwd,
     env,
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -326,6 +388,7 @@ const state = {
 const run = async () => {
   const smokeDir = await mkdtemp(path.join(os.tmpdir(), 'agent-browser-mcp-smoke-'))
   const userDataDir = path.join(smokeDir, 'user-data')
+  const projectFixture = await writeSmokeProjectFixture(smokeDir)
   const fixtureUrl = pathToFileURL(
     path.join(repoRoot, 'apps', 'desktop', 'static', 'local-fixture.html'),
   ).toString()
@@ -335,13 +398,14 @@ const run = async () => {
 
   const env = {
     ...process.env,
+    AGENT_BROWSER_PROJECT_ROOT: projectFixture.projectRoot,
     AGENT_BROWSER_USER_DATA_DIR: userDataDir,
     AGENT_BROWSER_TOOL_SERVER_PORT: String(port),
     AGENT_BROWSER_START_URL: 'about:blank',
   }
 
   const registrationPath = path.join(userDataDir, 'mcp-registration.json')
-  const { child, exitPromise } = await spawnApp(runtime, env, state)
+  const { child, exitPromise } = await spawnApp(runtime, env, repoRoot, state)
 
   try {
     const registration = await waitForFile(registrationPath, REGISTRATION_TIMEOUT_MS, state)
@@ -394,6 +458,78 @@ const run = async () => {
       assert(toolNames.includes(toolName), `tools/list did not include ${toolName}.`)
     }
 
+    const initialAppearance = await makeRpcRequest(
+      registration,
+      'tools/call',
+      {
+        name: 'chrome.getAppearance',
+        arguments: {},
+      },
+      3,
+    )
+    state.requests.push({
+      name: 'tools/call:chrome.getAppearance',
+      status: initialAppearance.status,
+      body: initialAppearance.body,
+    })
+    assert(initialAppearance.status === 200, 'chrome.getAppearance should return 200.')
+    const initialAppearanceState = initialAppearance.body?.result?.structuredContent?.appearance
+    await assertSamePath(
+      initialAppearanceState?.projectRoot,
+      projectFixture.projectRoot,
+      'chrome.getAppearance did not report the smoke project root.',
+    )
+    await assertSamePath(
+      initialAppearanceState?.configPath,
+      projectFixture.configPath,
+      'chrome.getAppearance did not report the smoke config path.',
+    )
+    assert(
+      initialAppearanceState?.chromeColor === SMOKE_CHROME_COLOR,
+      'chrome.getAppearance did not load the configured chrome color.',
+    )
+    assert(
+      initialAppearanceState?.accentColor === SMOKE_ACCENT_COLOR,
+      'chrome.getAppearance did not load the configured accent color.',
+    )
+    assert(
+      initialAppearanceState?.projectIconPath === `./${SMOKE_PROJECT_ICON_FILE}`,
+      'chrome.getAppearance did not load the configured project icon path.',
+    )
+    await assertSamePath(
+      initialAppearanceState?.resolvedProjectIconPath,
+      projectFixture.projectIconPath,
+      'chrome.getAppearance did not resolve the project icon path relative to the smoke project.',
+    )
+
+    const updatedAppearance = await makeRpcRequest(
+      registration,
+      'tools/call',
+      {
+        name: 'chrome.setAppearance',
+        arguments: {
+          accentColor: UPDATED_ACCENT_COLOR,
+        },
+      },
+      4,
+    )
+    state.requests.push({
+      name: 'tools/call:chrome.setAppearance',
+      status: updatedAppearance.status,
+      body: updatedAppearance.body,
+    })
+    assert(updatedAppearance.status === 200, 'chrome.setAppearance should return 200.')
+    const updatedAppearanceState = updatedAppearance.body?.result?.structuredContent?.appearance
+    assert(
+      updatedAppearanceState?.accentColor === UPDATED_ACCENT_COLOR,
+      'chrome.setAppearance did not apply the requested accent color.',
+    )
+    const persistedAppearance = JSON.parse(await readFile(projectFixture.configPath, 'utf8'))
+    assert(
+      persistedAppearance?.chrome?.accentColor === UPDATED_ACCENT_COLOR,
+      'chrome.setAppearance did not persist the updated accent color to .loop-browser.json.',
+    )
+
     const navigate = await makeRpcRequest(
       registration,
       'tools/call',
@@ -403,7 +539,7 @@ const run = async () => {
           target: fixtureUrl,
         },
       },
-      3,
+      5,
     )
     state.requests.push({ name: 'tools/call:page.navigate', status: navigate.status, body: navigate.body })
     assert(navigate.status === 200, 'page.navigate should return 200.')
@@ -419,7 +555,7 @@ const run = async () => {
         name: 'browser.listTabs',
         arguments: {},
       },
-      4,
+      6,
     )
     state.requests.push({ name: 'tools/call:browser.listTabs', status: listTabs.status, body: listTabs.body })
     assert(listTabs.status === 200, 'browser.listTabs should return 200.')
@@ -437,7 +573,7 @@ const run = async () => {
           forceRefresh: true,
         },
       },
-      5,
+      7,
     )
     state.requests.push({
       name: 'tools/call:page.viewAsMarkdown',
@@ -467,7 +603,7 @@ const run = async () => {
         name: 'browser.getWindowState',
         arguments: {},
       },
-      6,
+      8,
     )
     state.requests.push({
       name: 'tools/call:browser.getWindowState',
@@ -491,7 +627,7 @@ const run = async () => {
           target: 'pageViewport',
         },
       },
-      7,
+      9,
     )
     state.requests.push({
       name: 'tools/call:browser.resizeWindow',
@@ -518,7 +654,7 @@ const run = async () => {
           fileNameHint: 'fixture-page',
         },
       },
-      8,
+      10,
     )
     state.requests.push({
       name: 'tools/call:page.screenshot:page',
@@ -543,7 +679,7 @@ const run = async () => {
           fileNameHint: 'fixture-card',
         },
       },
-      9,
+      11,
     )
     state.requests.push({
       name: 'tools/call:page.screenshot:element',
@@ -567,7 +703,7 @@ const run = async () => {
           fileNameHint: 'fixture-window',
         },
       },
-      10,
+      12,
     )
     state.requests.push({
       name: 'tools/call:page.screenshot:window',
@@ -588,7 +724,7 @@ const run = async () => {
           artifactId: pageArtifact.artifactId,
         },
       },
-      11,
+      13,
     )
     state.requests.push({
       name: 'tools/call:artifacts.get:page',
@@ -609,7 +745,7 @@ const run = async () => {
           artifactId: windowArtifact.artifactId,
         },
       },
-      12,
+      14,
     )
     state.requests.push({
       name: 'tools/call:artifacts.get:window',
@@ -628,7 +764,7 @@ const run = async () => {
         name: 'artifacts.list',
         arguments: {},
       },
-      13,
+      15,
     )
     state.requests.push({
       name: 'tools/call:artifacts.list',
@@ -657,7 +793,7 @@ const run = async () => {
           artifactId: elementArtifact.artifactId,
         },
       },
-      14,
+      16,
     )
     state.requests.push({
       name: 'tools/call:artifacts.delete',
@@ -676,6 +812,12 @@ const run = async () => {
           runtime,
           registration,
           verifiedTools: toolNames,
+          appearance: {
+            projectRoot: initialAppearanceState.projectRoot,
+            chromeColor: initialAppearanceState.chromeColor,
+            accentColor: updatedAppearanceState.accentColor,
+            projectIconPath: initialAppearanceState.projectIconPath,
+          },
           navigatedUrl: fixtureUrl,
           markdownTitle: markdown.body.result.structuredContent.title,
           artifactIds: {
