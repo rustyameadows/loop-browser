@@ -1,44 +1,121 @@
 # Loop Browser
 
-Loop Browser is the bootstrap monorepo for the macOS Electron browser shell described in [agent-browser-plan.md](agent-browser-plan.md). The first push includes a working Electron desktop shell, a shared protocol package for IPC typing, and GitHub Actions that package unsigned macOS development artifacts.
+Loop Browser is a desktop browser shell for human-and-agent workflows. It gives you a real page view, trusted app chrome, a local MCP server, and built-in tools for picking elements, leaving feedback, extracting Markdown, and capturing screenshots.
 
-## Guides
+Instead of treating the browser like a black box, Loop Browser keeps the page, your notes, and the local tool surface in one place.
+
+## What You Can Do
+
+- Open `https://`, `http://`, or `file://` pages inside the app.
+- Use Pick Mode to inspect a page element and keep a structured descriptor in the chrome.
+- Open `Feedback Loop` to leave comments tied to the exact element you selected.
+- Open `View as MD` to convert the current page into Markdown and copy the result.
+- Open `MCP Status` to inspect the local tool server, registration details, and recent request activity.
+- Capture screenshots of the page, an element, or the full app window through MCP tools.
+
+## First Launch
+
+The app opens a checked-in local fixture on first launch, so you can verify navigation before wiring it into anything else. From there, replace the address with any page you want to inspect.
+
+Plain web popups are opened externally instead of spawning in-app popup windows.
+
+## MCP Integration
+
+While the app is running, it starts a localhost JSON-RPC MCP server at `127.0.0.1`. On macOS, the registration manifest is written to:
+
+`~/Library/Application Support/Loop Browser/mcp-registration.json`
+
+That manifest includes the local transport URL and bearer token header needed by tool clients.
+
+The current MCP tool set includes:
+
+- `browser.listTabs`
+- `browser.getWindowState`
+- `browser.resizeWindow`
+- `page.navigate`
+- `page.reload`
+- `picker.enable`
+- `picker.disable`
+- `picker.lastSelection`
+- `feedback.getState`
+- `feedback.list`
+- `feedback.create`
+- `feedback.reply`
+- `feedback.progress`
+- `feedback.setStatus`
+- `page.viewAsMarkdown`
+- `page.screenshot`
+- `artifacts.get`
+- `artifacts.list`
+- `artifacts.delete`
+
+Screenshot results are artifact-backed. The tool server stores them under the app data directory and returns metadata plus an `artifactId`, which you can resolve later through `artifacts.get`.
+
+## Project Notes
 
 - [Human-Agent Collaboration Guide](docs/human-agent-collaboration.md)
+- [Original product plan](agent-browser-plan.md)
 
 ## Workspace Layout
 
-- `apps/desktop`: Electron main process, trusted React chrome, and the embedded page view.
-- `packages/protocol`: shared navigation command and navigation state types plus guard helpers.
-- `packages/selector`: element descriptor normalization and selector generation for DOM pick mode.
+- `apps/desktop`: Electron app, trusted React chrome, and embedded page view.
+- `packages/protocol`: shared command/state types and guards.
+- `packages/selector`: DOM selector normalization and Playwright-style locator helpers.
+- `scripts/mcp-smoke.mjs`: local MCP smoke harness for dev and packaged verification.
 
-## Local Setup
+## CI
 
-1. Install dependencies with `npm install`.
-2. Start the desktop app with `npm run dev`.
-3. Run checks with `npm run lint`, `npm run typecheck`, and `npm run test`.
-4. Run the end-to-end MCP smoke with `npm run smoke:mcp`.
-5. Build the unpackaged app with `npm run build`.
-6. Produce a macOS zip artifact locally with `npm run package:mac`.
+GitHub Actions installs dependencies, lints, typechecks, tests, builds the app, runs the MCP smoke checks, and packages a macOS artifact on pushes to `main` and on pull requests.
 
-The desktop shell opens a checked-in `file://` fixture on first launch. Replace the address with any `https://`, `http://`, or `file://` target to exercise the page view. In-app popups are denied; plain `http/https` popup attempts are opened externally.
+## Build Steps
 
-The chrome also includes a DOM pick mode. Use the crosshair button or `View > Toggle Pick Mode`, then click any page element to capture a structured descriptor. The selected descriptor stays in the trusted chrome until you clear it, and the JSON can be copied directly from the inspector strip.
+1. Install dependencies.
 
-The toolbar also includes `Feedback Loop`. Picker selections can open a live draft automatically, so humans can annotate the exact element they clicked, agents can reply in-thread, and status can move from `open` to `resolved` in the same shared context. See the [Human-Agent Collaboration Guide](docs/human-agent-collaboration.md) for the expected workflow.
+```sh
+npm install
+```
 
-The top toolbar now also includes `View as MD`. That button opens a dedicated trusted Markdown panel beside the page view, snapshots the active page DOM in the main process, converts it with Defuddle, and exposes the raw Markdown plus page metadata. Use the panel actions to copy or refresh the extracted Markdown for the current page.
+2. Start the app in development mode.
 
-The toolbar also includes `MCP Status`, a live red/yellow/green indicator for the local MCP server. That button opens a dedicated diagnostics panel with the current transport URL, registration manifest path, exposed tools, recent request activity, and a built-in self-test against `/health`, `initialize`, and `tools/list`.
+```sh
+npm run dev
+```
 
-While the app is running, the main process also starts a localhost JSON-RPC tool server at `127.0.0.1`. The current registration manifest is written to `~/Library/Application Support/Loop Browser/mcp-registration.json` on macOS and includes the URL plus bearer token header needed by local tool clients. The current tool set includes `browser.listTabs`, `browser.getWindowState`, `browser.resizeWindow`, `page.navigate`, `picker.enable`, `picker.disable`, `picker.lastSelection`, `feedback.getState`, `feedback.list`, `feedback.create`, `feedback.reply`, `feedback.setStatus`, `page.viewAsMarkdown`, `page.screenshot`, `artifacts.get`, `artifacts.list`, and `artifacts.delete`.
+3. Run the standard checks.
 
-Screenshot tool results are artifact-backed. The tool server stores screenshots under the app’s data directory, returns lightweight metadata plus an `artifactId`, and lets local clients resolve the saved file path through `artifacts.get`. Supported screenshot targets are the visible page view, a selected DOM element, and the full app window including native frame.
+```sh
+npm run lint
+npm run typecheck
+npm run test
+```
 
-For deterministic MCP verification, use `npm run smoke:mcp` for the full local flow, or `npm run smoke:mcp:dev` / `npm run smoke:mcp:packaged` after `npm run build`. The smoke harness launches the app with isolated `AGENT_BROWSER_USER_DATA_DIR`, `AGENT_BROWSER_TOOL_SERVER_PORT`, and `AGENT_BROWSER_START_URL` overrides so it never reuses your normal profile.
+4. Build the packaged desktop app.
 
-## CI Builds
+```sh
+npm run build
+```
 
-The repo ships with `.github/workflows/push.yml`. On pull requests and on pushes to `main`, GitHub Actions installs dependencies, lints, typechecks, tests, packages the macOS app, and uploads the artifact as `agent-browser-macos-<commit-sha>`.
+5. Verify MCP behavior.
 
-After the first successful push to `main`, make `main` the default branch in GitHub and enable branch protection so the Actions job stays green before merges.
+Full flow:
+
+```sh
+npm run smoke:mcp
+```
+
+Or run them separately after `npm run build`:
+
+```sh
+npm run smoke:mcp:dev
+npm run smoke:mcp:packaged
+```
+
+The smoke harness launches the app with isolated `AGENT_BROWSER_USER_DATA_DIR`, `AGENT_BROWSER_TOOL_SERVER_PORT`, and `AGENT_BROWSER_START_URL` overrides so it does not reuse your normal profile.
+
+6. Produce a local macOS zip artifact.
+
+```sh
+npm run package:mac
+```
+
+7. If the packaged smoke test fails on full-window screenshots on macOS, grant Screen Recording permission to `Loop Browser.app` and rerun the smoke test.
