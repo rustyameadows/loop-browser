@@ -212,6 +212,25 @@ export const deriveProjectSessionSlug = (projectRoot: string): string => {
   return `${slug || 'project'}-${hash}`;
 };
 
+export const toProjectRelativePath = (projectRoot: string, filePath: string): string => {
+  const relativePath = path.relative(path.resolve(projectRoot), path.resolve(filePath));
+  const normalizedRelativePath = relativePath.split(path.sep).join('/');
+
+  if (
+    normalizedRelativePath.length === 0 ||
+    normalizedRelativePath === '.' ||
+    normalizedRelativePath.startsWith('../') ||
+    normalizedRelativePath === '..' ||
+    path.isAbsolute(normalizedRelativePath)
+  ) {
+    throw new Error('Selected icon must be inside the current project folder.');
+  }
+
+  return normalizedRelativePath.startsWith('./')
+    ? normalizedRelativePath
+    : `./${normalizedRelativePath}`;
+};
+
 export const deriveProjectUserDataDir = (
   projectRoot: string,
   platform = process.platform,

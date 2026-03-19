@@ -10,6 +10,7 @@ import {
   deriveProjectSessionSlug,
   deriveProjectUserDataDir,
   parseProjectAppearanceConfig,
+  toProjectRelativePath,
 } from '../src/main/project-appearance';
 
 const tempDirs: string[] = [];
@@ -209,5 +210,20 @@ describe('project session identity helpers', () => {
     expect(
       deriveProjectUserDataDir('/Users/tester/dev/browser-loop', 'darwin', '/Users/tester'),
     ).toContain('/Library/Application Support/Loop Browser/projects/');
+  });
+
+  it('converts icon paths to project-relative config paths', () => {
+    expect(
+      toProjectRelativePath('/Users/tester/dev/browser-loop', '/Users/tester/dev/browser-loop/assets/icon.png'),
+    ).toBe('./assets/icon.png');
+  });
+
+  it('rejects icon files outside the selected project', () => {
+    expect(() =>
+      toProjectRelativePath(
+        '/Users/tester/dev/browser-loop',
+        '/Users/tester/dev/shared/icon.png',
+      ),
+    ).toThrow('Selected icon must be inside the current project folder.');
   });
 });

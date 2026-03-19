@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type JSX, type SVGProps } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type JSX, type SVGProps } from 'react';
 import {
   createEmptyChromeAppearanceState,
   createEmptyFeedbackState,
@@ -25,8 +25,15 @@ import {
 } from '@agent-browser/protocol';
 import {
   getChromeAppearanceCssVariables,
+  getChromeAppearanceThemeTokens,
   projectIconSrc,
 } from './chrome-appearance-theme';
+import {
+  getColorPickerValue,
+  getHexColorDraftError,
+  normalizeHexColorDraft,
+  resolveDraftProjectIconPath,
+} from './project-style-form';
 
 const emptyState = createEmptyNavigationState();
 const emptyChromeAppearanceState = createEmptyChromeAppearanceState();
@@ -1420,16 +1427,45 @@ const ProjectSurface = ({
   const [projectIconPathDraft, setProjectIconPathDraft] = useState(
     chromeAppearanceState.projectIconPath,
   );
-  const projectIconPreviewSrc = projectIconSrc(chromeAppearanceState.resolvedProjectIconPath);
+  const [projectIconPickerError, setProjectIconPickerError] = useState<string | null>(null);
+  const chromeColorError = getHexColorDraftError('Chrome color', chromeColorDraft);
+  const accentColorError = getHexColorDraftError('Accent color', accentColorDraft);
+  const hasDraftErrors = Boolean(chromeColorError || accentColorError || projectIconPickerError);
+  const effectiveChromeColor = getColorPickerValue(
+    chromeColorDraft,
+    chromeAppearanceState.chromeColor,
+  );
+  const effectiveAccentColor = getColorPickerValue(
+    accentColorDraft,
+    chromeAppearanceState.accentColor,
+  );
+  const previewTheme = getChromeAppearanceThemeTokens({
+    chromeColor: effectiveChromeColor,
+    accentColor: effectiveAccentColor,
+  });
+  const draftProjectIconPreviewSrc = projectIconSrc(
+    resolveDraftProjectIconPath(
+      chromeAppearanceState.projectRoot,
+      projectIconPathDraft,
+      chromeAppearanceState.projectIconPath,
+      chromeAppearanceState.resolvedProjectIconPath,
+    ),
+  );
+  const previewStyle = {
+    backgroundColor: effectiveChromeColor,
+    color: previewTheme.chromeText,
+  } satisfies CSSProperties;
 
   useEffect(() => {
     setChromeColorDraft(chromeAppearanceState.chromeColor);
     setAccentColorDraft(chromeAppearanceState.accentColor);
     setProjectIconPathDraft(chromeAppearanceState.projectIconPath);
+    setProjectIconPickerError(null);
   }, [
     chromeAppearanceState.chromeColor,
     chromeAppearanceState.accentColor,
     chromeAppearanceState.projectIconPath,
+    chromeAppearanceState.projectRoot,
   ]);
 
   const runChromeAppearanceCommand = async (command: ChromeAppearanceCommand): Promise<void> => {
@@ -1437,15 +1473,15 @@ const ProjectSurface = ({
   };
 
   const handleSave = async (): Promise<void> => {
-    if (!hasProject) {
+    if (!hasProject || hasDraftErrors) {
       return;
     }
 
     await runChromeAppearanceCommand({
       action: 'set',
-      chromeColor: chromeColorDraft,
-      accentColor: accentColorDraft,
-      projectIconPath: projectIconPathDraft,
+      chromeColor: normalizeHexColorDraft(chromeColorDraft),
+      accentColor: normalizeHexColorDraft(accentColorDraft),
+      projectIconPath: projectIconPathDraft.trim(),
     });
   };
 
@@ -1455,6 +1491,31 @@ const ProjectSurface = ({
     }
 
     await runChromeAppearanceCommand({ action: 'reset' });
+  };
+
+  const handleBrowseProjectIcon = async (): Promise<void> => {
+    if (!hasProject) {
+      return;
+    }
+
+    try {
+      const selectedProjectIconPath = await window.agentBrowser.browseProjectIcon();
+      if (selectedProjectIconPath === null) {
+        return;
+      }
+
+      setProjectIconPathDraft(selectedProjectIconPath);
+      setProjectIconPickerError(null);
+    } catch (error) {
+      setProjectIconPickerError(
+        error instanceof Error ? error.message : 'Could not choose a project icon.',
+      );
+    }
+  };
+
+  const handleClearProjectIcon = (): void => {
+    setProjectIconPathDraft('');
+    setProjectIconPickerError(null);
   };
 
   return (
@@ -1484,11 +1545,11 @@ const ProjectSurface = ({
           <div className="projectSurface__heroMeta">
             <div
               className="projectSurface__swatch"
-              style={{ backgroundColor: chromeAppearanceState.chromeColor }}
+              style={{ backgroundColor: effectiveChromeColor }}
             />
             <div
               className="projectSurface__swatch projectSurface__swatch--accent"
-              style={{ backgroundColor: chromeAppearanceState.accentColor }}
+              style={{ backgroundColor: effectiveAccentColor }}
             />
           </div>
         </section>
@@ -1534,52 +1595,115 @@ const ProjectSurface = ({
           <section className="projectSurface__section">
             <div className="projectSurface__sectionHeader">
               <div className="projectSurface__sectionTitle">Appearance</div>
-              <div className="projectSurface__sectionMeta">Hex colors only in v1</div>
+              <div className="projectSurface__sectionMeta">Use picker or hex in #RRGGBB</div>
             </div>
 
             <label className="projectSurface__field">
               <span className="projectSurface__fieldLabel">Chrome color</span>
-              <input
-                className="projectSurface__input"
-                disabled={!hasProject}
-                onChange={(event) => setChromeColorDraft(event.target.value)}
-                placeholder="#FAFBFD"
-                spellCheck={false}
-                type="text"
-                value={chromeColorDraft}
-              />
+              <div className="projectSurface__colorField">
+                <input
+                  aria-label="Choose chrome color"
+                  className="projectSurface__colorPicker"
+                  disabled={!hasProject}
+                  onChange={(event) => setChromeColorDraft(event.target.value.toUpperCase())}
+                  type="color"
+                  value={getColorPickerValue(chromeColorDraft, chromeAppearanceState.chromeColor)}
+                />
+                <input
+                  aria-invalid={chromeColorError !== null}
+                  className="projectSurface__input projectSurface__input--hex"
+                  disabled={!hasProject}
+                  onBlur={() => {
+                    if (chromeColorError === null) {
+                      setChromeColorDraft(normalizeHexColorDraft(chromeColorDraft));
+                    }
+                  }}
+                  onChange={(event) => {
+                    setChromeColorDraft(event.target.value.toUpperCase());
+                  }}
+                  placeholder="#FAFBFD"
+                  spellCheck={false}
+                  type="text"
+                  value={chromeColorDraft}
+                />
+              </div>
+              {chromeColorError ? (
+                <div className="projectSurface__fieldError">{chromeColorError}</div>
+              ) : null}
             </label>
 
             <label className="projectSurface__field">
               <span className="projectSurface__fieldLabel">Accent color</span>
-              <input
-                className="projectSurface__input"
-                disabled={!hasProject}
-                onChange={(event) => setAccentColorDraft(event.target.value)}
-                placeholder="#0A84FF"
-                spellCheck={false}
-                type="text"
-                value={accentColorDraft}
-              />
+              <div className="projectSurface__colorField">
+                <input
+                  aria-label="Choose accent color"
+                  className="projectSurface__colorPicker"
+                  disabled={!hasProject}
+                  onChange={(event) => setAccentColorDraft(event.target.value.toUpperCase())}
+                  type="color"
+                  value={getColorPickerValue(accentColorDraft, chromeAppearanceState.accentColor)}
+                />
+                <input
+                  aria-invalid={accentColorError !== null}
+                  className="projectSurface__input projectSurface__input--hex"
+                  disabled={!hasProject}
+                  onBlur={() => {
+                    if (accentColorError === null) {
+                      setAccentColorDraft(normalizeHexColorDraft(accentColorDraft));
+                    }
+                  }}
+                  onChange={(event) => {
+                    setAccentColorDraft(event.target.value.toUpperCase());
+                  }}
+                  placeholder="#0A84FF"
+                  spellCheck={false}
+                  type="text"
+                  value={accentColorDraft}
+                />
+              </div>
+              {accentColorError ? (
+                <div className="projectSurface__fieldError">{accentColorError}</div>
+              ) : null}
             </label>
 
-            <label className="projectSurface__field">
+            <div className="projectSurface__field">
               <span className="projectSurface__fieldLabel">Project icon path</span>
-              <input
-                className="projectSurface__input"
-                disabled={!hasProject}
-                onChange={(event) => setProjectIconPathDraft(event.target.value)}
-                placeholder="./assets/project-icon.png"
-                spellCheck={false}
-                type="text"
-                value={projectIconPathDraft}
-              />
-            </label>
+              <div className="projectSurface__iconPickerRow">
+                <div className="projectSurface__iconPickerPath">
+                  {projectIconPathDraft || 'No icon selected yet'}
+                </div>
+                <div className="projectSurface__iconPickerActions">
+                  <button
+                    className="shell__pillButton shell__pillButton--muted"
+                    disabled={!hasProject}
+                    onClick={() => void handleBrowseProjectIcon()}
+                    type="button"
+                  >
+                    Choose Icon
+                  </button>
+                  <button
+                    className="shell__pillButton shell__pillButton--muted"
+                    disabled={!hasProject || !projectIconPathDraft}
+                    onClick={handleClearProjectIcon}
+                    type="button"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <div className="projectSurface__sectionMeta">
+                Only files inside the selected project folder are allowed, and Loop Browser stores
+                the icon as a relative path in <code>.loop-browser.json</code>.
+              </div>
+              {projectIconPickerError ? (
+                <div className="projectSurface__fieldError">{projectIconPickerError}</div>
+              ) : null}
+            </div>
 
             <div className="projectSurface__actions">
               <button
                 className="shell__pillButton"
-                disabled={!hasProject}
+                disabled={!hasProject || hasDraftErrors}
                 onClick={() => void handleSave()}
                 type="button"
               >
@@ -1606,42 +1730,65 @@ const ProjectSurface = ({
           <section className="projectSurface__section">
             <div className="projectSurface__sectionHeader">
               <div className="projectSurface__sectionTitle">Live preview</div>
-              <div className="projectSurface__sectionMeta">
-                Current applied style and project icon
-              </div>
+              <div className="projectSurface__sectionMeta">Draft preview before save</div>
             </div>
 
-            <div className="projectSurface__preview" style={{ backgroundColor: chromeColorDraft }}>
-              <div className="projectSurface__previewBar">
-                <div className="projectSurface__previewPill" />
-                <div className="projectSurface__previewTitle">Loop Browser</div>
+            <div className="projectSurface__preview" style={previewStyle}>
+              <div
+                className="projectSurface__previewBar"
+                style={{ backgroundColor: previewTheme.previewBarBg }}
+              >
+                <div
+                  className="projectSurface__previewPill"
+                  style={{ backgroundColor: previewTheme.previewPillBg }}
+                />
+                <div
+                  className="projectSurface__previewTitle"
+                  style={{ color: previewTheme.previewBarFg }}
+                >
+                  Loop Browser
+                </div>
                 <div
                   className="projectSurface__previewAccent"
-                  style={{ backgroundColor: accentColorDraft }}
+                  style={{ backgroundColor: previewTheme.accentStrongBg }}
                 />
               </div>
               <div className="projectSurface__previewBody">
-                <div className="projectSurface__previewIconWrap">
-                  {projectIconPreviewSrc ? (
+                <div
+                  className="projectSurface__previewIconWrap"
+                  style={{ backgroundColor: previewTheme.previewIconWrapBg }}
+                >
+                  {draftProjectIconPreviewSrc ? (
                     <img
                       alt=""
                       className="projectSurface__previewIcon"
-                      src={projectIconPreviewSrc}
+                      src={draftProjectIconPreviewSrc}
                     />
                   ) : (
                     <div
                       className="projectSurface__previewIconFallback"
-                      style={{ backgroundColor: accentColorDraft }}
+                      style={{
+                        backgroundColor: previewTheme.previewIconFallbackBg,
+                        color: previewTheme.previewIconFallbackFg,
+                      }}
                     >
                       LB
                     </div>
                   )}
                 </div>
                 <div className="projectSurface__previewCopy">
-                  <div className="projectSurface__previewHeading">Project session</div>
-                  <div className="projectSurface__previewMeta">
+                  <div
+                    className="projectSurface__previewHeading"
+                    style={{ color: previewTheme.chromeText }}
+                  >
+                    Project session
+                  </div>
+                  <div
+                    className="projectSurface__previewMeta"
+                    style={{ color: previewTheme.chromeMuted }}
+                  >
                     {hasProject
-                      ? chromeAppearanceState.projectIconPath || 'No project icon configured'
+                      ? projectIconPathDraft || 'No project icon configured'
                       : 'Choose a project folder to enable config-backed styling'}
                   </div>
                 </div>

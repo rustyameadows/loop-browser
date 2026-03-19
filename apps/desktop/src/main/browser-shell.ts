@@ -15,6 +15,7 @@ import {
   shell,
 } from 'electron';
 import {
+  CHROME_APPEARANCE_BROWSE_ICON_CHANNEL,
   CHROME_APPEARANCE_COMMAND_CHANNEL,
   CHROME_APPEARANCE_GET_STATE_CHANNEL,
   CHROME_APPEARANCE_STATE_CHANNEL,
@@ -81,6 +82,7 @@ import {
 import {
   PROJECT_SELECTION_FILE_NAME,
   ProjectAppearanceController,
+  toProjectRelativePath,
   type ProjectAppearanceRuntime,
 } from './project-appearance';
 import {
@@ -289,6 +291,38 @@ export class BrowserShell {
 
   selectProjectFolder(): void {
     void this.executeChromeAppearanceCommand({ action: 'selectProject' });
+  }
+
+  async browseProjectIcon(): Promise<string | null> {
+    this.ensureWindow();
+
+    const projectRoot = this.chromeAppearanceState.projectRoot.trim();
+    if (!projectRoot) {
+      throw new Error('Choose a project folder before picking an icon.');
+    }
+
+    if (!this.window) {
+      return null;
+    }
+
+    const result = await dialog.showOpenDialog(this.window, {
+      title: 'Choose Project Icon',
+      buttonLabel: 'Choose Icon',
+      defaultPath: this.chromeAppearanceState.resolvedProjectIconPath ?? projectRoot,
+      properties: ['openFile'],
+      filters: [
+        {
+          name: 'Images',
+          extensions: ['png', 'jpg', 'jpeg', 'webp', 'svg'],
+        },
+      ],
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+
+    return toProjectRelativePath(projectRoot, result.filePaths[0]);
   }
 
   listTabs(): BrowserTabSnapshot[] {
@@ -796,6 +830,14 @@ export class BrowserShell {
       this.assertTrustedSender(event);
       return this.getChromeAppearanceState();
     });
+
+    ipcMain.handle(
+      CHROME_APPEARANCE_BROWSE_ICON_CHANNEL,
+      async (event: IpcMainInvokeEvent): Promise<string | null> => {
+        this.assertTrustedSender(event);
+        return this.browseProjectIcon();
+      },
+    );
 
     ipcMain.handle(
       FEEDBACK_COMMAND_CHANNEL,

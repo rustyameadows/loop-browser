@@ -1,6 +1,7 @@
 export const CHROME_APPEARANCE_COMMAND_CHANNEL = 'chrome-appearance:command';
 export const CHROME_APPEARANCE_GET_STATE_CHANNEL = 'chrome-appearance:get-state';
 export const CHROME_APPEARANCE_STATE_CHANNEL = 'chrome-appearance:state';
+export const CHROME_APPEARANCE_BROWSE_ICON_CHANNEL = 'chrome-appearance:browse-icon';
 
 export const DEFAULT_CHROME_COLOR = '#FAFBFD';
 export const DEFAULT_ACCENT_COLOR = '#0A84FF';

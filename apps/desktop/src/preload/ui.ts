@@ -1,5 +1,6 @@
 import { clipboard, contextBridge, ipcRenderer } from 'electron';
 import {
+  CHROME_APPEARANCE_BROWSE_ICON_CHANNEL,
   CHROME_APPEARANCE_COMMAND_CHANNEL,
   CHROME_APPEARANCE_GET_STATE_CHANNEL,
   CHROME_APPEARANCE_STATE_CHANNEL,
@@ -119,6 +120,9 @@ const navigationBridge: NavigationBridge = {
     return () => {
       ipcRenderer.removeListener(CHROME_APPEARANCE_STATE_CHANNEL, wrapped);
     };
+  },
+  browseProjectIcon(): Promise<string | null> {
+    return ipcRenderer.invoke(CHROME_APPEARANCE_BROWSE_ICON_CHANNEL) as Promise<string | null>;
   },
   executeFeedback(command: FeedbackCommand): Promise<FeedbackState> {
     return ipcRenderer.invoke(FEEDBACK_COMMAND_CHANNEL, command) as Promise<FeedbackState>;

@@ -117,6 +117,7 @@ export interface NavigationBridge {
   executeChromeAppearance(command: ChromeAppearanceCommand): Promise<ChromeAppearanceState>;
   getChromeAppearanceState(): Promise<ChromeAppearanceState>;
   subscribeChromeAppearance(listener: (state: ChromeAppearanceState) => void): () => void;
+  browseProjectIcon(): Promise<string | null>;
   executeFeedback(command: FeedbackCommand): Promise<FeedbackState>;
   getFeedbackState(): Promise<FeedbackState>;
   subscribeFeedback(listener: (state: FeedbackState) => void): () => void;

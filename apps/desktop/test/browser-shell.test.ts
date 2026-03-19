@@ -418,4 +418,66 @@ describe('BrowserShell', () => {
     expect(state.projectRoot).toBe('/tmp/client-project');
     expect(state.configPath).toBe('/tmp/client-project/.loop-browser.json');
   });
+
+  it('returns a project-relative icon path from the native icon picker', async () => {
+    vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({
+      canceled: false,
+      filePaths: ['/tmp/project/assets/icon.png'],
+    });
+
+    const shell = new BrowserShell({
+      projectAppearance: createProjectAppearanceRuntime(),
+    });
+    const subject = shell as unknown as BrowserShellHarness & {
+      window: {
+        contentView: {
+          addChildView: ReturnType<typeof vi.fn>;
+          removeChildView: ReturnType<typeof vi.fn>;
+        };
+        focus: ReturnType<typeof vi.fn>;
+      } | null;
+    };
+
+    subject.window = {
+      contentView: {
+        addChildView: vi.fn(),
+        removeChildView: vi.fn(),
+      },
+      focus: vi.fn(),
+    };
+
+    await expect(shell.browseProjectIcon()).resolves.toBe('./assets/icon.png');
+  });
+
+  it('rejects icon files outside the selected project folder', async () => {
+    vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({
+      canceled: false,
+      filePaths: ['/tmp/other/icon.png'],
+    });
+
+    const shell = new BrowserShell({
+      projectAppearance: createProjectAppearanceRuntime(),
+    });
+    const subject = shell as unknown as BrowserShellHarness & {
+      window: {
+        contentView: {
+          addChildView: ReturnType<typeof vi.fn>;
+          removeChildView: ReturnType<typeof vi.fn>;
+        };
+        focus: ReturnType<typeof vi.fn>;
+      } | null;
+    };
+
+    subject.window = {
+      contentView: {
+        addChildView: vi.fn(),
+        removeChildView: vi.fn(),
+      },
+      focus: vi.fn(),
+    };
+
+    await expect(shell.browseProjectIcon()).rejects.toThrow(
+      'Selected icon must be inside the current project folder.',
+    );
+  });
 });
