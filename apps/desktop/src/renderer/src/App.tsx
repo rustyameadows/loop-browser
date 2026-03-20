@@ -7,6 +7,7 @@ import {
   createEmptyMarkdownViewState,
   createEmptyNavigationState,
   createEmptyPickerState,
+  createEmptyProjectAgentLoginState,
   createEmptySessionViewState,
   type ChromeAppearanceCommand,
   type ChromeAppearanceState,
@@ -24,6 +25,7 @@ import {
   type NavigationState,
   type PickerCommand,
   type PickerState,
+  type ProjectAgentLoginState,
   type SessionCommand,
   type SessionSummary,
   type SessionViewState,
@@ -40,6 +42,7 @@ import {
 } from '../../shared/dock-icon-style';
 import {
   getColorPickerValue,
+  getDefaultUrlDraftError,
   getHexColorDraftError,
   normalizeHexColorDraft,
   resolveDraftProjectIconPath,
@@ -52,6 +55,7 @@ const emptyPickerState = createEmptyPickerState();
 const emptyFeedbackState = createEmptyFeedbackState();
 const emptyMarkdownState = createEmptyMarkdownViewState();
 const emptyMcpState = createEmptyMcpViewState();
+const emptyProjectAgentLoginState = createEmptyProjectAgentLoginState();
 const emptySessionState = createEmptySessionViewState();
 const stubTabs = ['Agent Chat', 'Inspector'];
 const AGENT_DONE_PULSE_MS = 1600;
@@ -748,6 +752,41 @@ const useChromeAppearanceState = (): ChromeAppearanceState => {
   return chromeAppearanceState;
 };
 
+const useProjectAgentLoginState = (): ProjectAgentLoginState => {
+  const [projectAgentLoginState, setProjectAgentLoginState] =
+    useState<ProjectAgentLoginState>(emptyProjectAgentLoginState);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const syncInitialProjectAgentLoginState = async (): Promise<void> => {
+      const initialState = await window.agentBrowser.getProjectAgentLoginState();
+      if (!isMounted) {
+        return;
+      }
+
+      setProjectAgentLoginState(initialState);
+    };
+
+    void syncInitialProjectAgentLoginState();
+
+    const unsubscribe = window.agentBrowser.subscribeProjectAgentLogin((nextState) => {
+      if (!isMounted) {
+        return;
+      }
+
+      setProjectAgentLoginState(nextState);
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, []);
+
+  return projectAgentLoginState;
+};
+
 const useSessionState = (): SessionViewState => {
   const [sessionState, setSessionState] = useState<SessionViewState>(emptySessionState);
 
@@ -1228,6 +1267,9 @@ const ChromeSurface = ({
       ? `Agent update complete${mcpPresence.message ? `: ${mcpPresence.message}` : ''}`
       : `MCP status: ${mcpViewState.statusLabel}`;
   const currentProjectIconSrc = projectIconSrc(chromeAppearanceState.resolvedProjectIconPath);
+  const agentLoginButtonTitle =
+    navigationState.agentLoginCta.reason ??
+    'Fill the detected login form with the configured agent login.';
 
   return (
     <main className="shell">
@@ -1356,6 +1398,18 @@ const ChromeSurface = ({
             >
               <ChromeIcon className="shell__icon" name="crosshair" />
             </button>
+            {navigationState.agentLoginCta.visible ? (
+              <button
+                aria-label="Use agent login"
+                className="shell__pillButton shell__pillButton--muted"
+                disabled={!navigationState.agentLoginCta.enabled}
+                onClick={() => void runCommand({ action: 'useAgentLogin' })}
+                title={agentLoginButtonTitle}
+                type="button"
+              >
+                <span>Use Agent Login</span>
+              </button>
+            ) : null}
             <button
               aria-label={
                 chromeAppearanceState.isOpen ? 'Close project style' : 'Open project style'
@@ -1914,9 +1968,11 @@ const McpSurface = (): JSX.Element => {
 
 const ProjectSurface = ({
   chromeAppearanceState,
+  projectAgentLoginState,
   sessionState,
 }: {
   chromeAppearanceState: ChromeAppearanceState;
+  projectAgentLoginState: ProjectAgentLoginState;
   sessionState: SessionViewState;
 }): JSX.Element => {
   const hasProject = chromeAppearanceState.projectRoot.trim().length > 0;
@@ -1924,13 +1980,20 @@ const ProjectSurface = ({
     sessionState.role === 'project-session' ? 'Open Another Project' : 'Open Project';
   const [chromeColorDraft, setChromeColorDraft] = useState(chromeAppearanceState.chromeColor);
   const [accentColorDraft, setAccentColorDraft] = useState(chromeAppearanceState.accentColor);
+  const [defaultUrlDraft, setDefaultUrlDraft] = useState(chromeAppearanceState.defaultUrl);
   const [projectIconPathDraft, setProjectIconPathDraft] = useState(
     chromeAppearanceState.projectIconPath,
   );
+  const [agentLoginUsernameDraft, setAgentLoginUsernameDraft] = useState('');
+  const [agentLoginPasswordDraft, setAgentLoginPasswordDraft] = useState('');
+  const [agentLoginActionError, setAgentLoginActionError] = useState<string | null>(null);
   const [projectIconPickerError, setProjectIconPickerError] = useState<string | null>(null);
   const chromeColorError = getHexColorDraftError('Chrome color', chromeColorDraft);
   const accentColorError = getHexColorDraftError('Accent color', accentColorDraft);
-  const hasDraftErrors = Boolean(chromeColorError || accentColorError || projectIconPickerError);
+  const defaultUrlError = getDefaultUrlDraftError(defaultUrlDraft);
+  const hasAppearanceDraftErrors = Boolean(
+    chromeColorError || accentColorError || projectIconPickerError,
+  );
   const effectiveChromeColor = getColorPickerValue(
     chromeColorDraft,
     chromeAppearanceState.chromeColor,
@@ -1984,21 +2047,36 @@ const ProjectSurface = ({
   useEffect(() => {
     setChromeColorDraft(chromeAppearanceState.chromeColor);
     setAccentColorDraft(chromeAppearanceState.accentColor);
+    setDefaultUrlDraft(chromeAppearanceState.defaultUrl);
     setProjectIconPathDraft(chromeAppearanceState.projectIconPath);
     setProjectIconPickerError(null);
   }, [
     chromeAppearanceState.chromeColor,
     chromeAppearanceState.accentColor,
+    chromeAppearanceState.defaultUrl,
     chromeAppearanceState.projectIconPath,
     chromeAppearanceState.projectRoot,
+  ]);
+
+  useEffect(() => {
+    setAgentLoginUsernameDraft(
+      projectAgentLoginState.source === 'local-file' ? projectAgentLoginState.username : '',
+    );
+    setAgentLoginPasswordDraft('');
+    setAgentLoginActionError(null);
+  }, [
+    projectAgentLoginState.projectRoot,
+    projectAgentLoginState.source,
+    projectAgentLoginState.username,
+    projectAgentLoginState.hasPassword,
   ]);
 
   const runChromeAppearanceCommand = async (command: ChromeAppearanceCommand): Promise<void> => {
     await window.agentBrowser.executeChromeAppearance(command);
   };
 
-  const handleSave = async (): Promise<void> => {
-    if (!hasProject || hasDraftErrors) {
+  const handleSaveAppearance = async (): Promise<void> => {
+    if (!hasProject || hasAppearanceDraftErrors) {
       return;
     }
 
@@ -2007,6 +2085,17 @@ const ProjectSurface = ({
       chromeColor: normalizeHexColorDraft(chromeColorDraft),
       accentColor: normalizeHexColorDraft(accentColorDraft),
       projectIconPath: projectIconPathDraft.trim(),
+    });
+  };
+
+  const handleSaveStartup = async (): Promise<void> => {
+    if (!hasProject || defaultUrlError) {
+      return;
+    }
+
+    await runChromeAppearanceCommand({
+      action: 'set',
+      defaultUrl: defaultUrlDraft.trim(),
     });
   };
 
@@ -2042,6 +2131,100 @@ const ProjectSurface = ({
     setProjectIconPathDraft('');
     setProjectIconPickerError(null);
   };
+
+  const handleSaveAgentLogin = async (): Promise<void> => {
+    if (!hasProject) {
+      return;
+    }
+
+    setAgentLoginActionError(null);
+    try {
+      await window.agentBrowser.saveProjectAgentLogin({
+        username: agentLoginUsernameDraft.trim(),
+        password: agentLoginPasswordDraft,
+      });
+    } catch (error) {
+      setAgentLoginActionError(
+        error instanceof Error ? error.message : 'Could not save the project agent login.',
+      );
+    }
+  };
+
+  const handleClearAgentLogin = async (): Promise<void> => {
+    if (!hasProject) {
+      return;
+    }
+
+    setAgentLoginActionError(null);
+    try {
+      await window.agentBrowser.clearProjectAgentLogin();
+    } catch (error) {
+      setAgentLoginActionError(
+        error instanceof Error ? error.message : 'Could not clear the project agent login.',
+      );
+    }
+  };
+
+  const hasUnsavedAppearanceDraft =
+    normalizeHexColorDraft(chromeColorDraft) !== chromeAppearanceState.chromeColor ||
+    normalizeHexColorDraft(accentColorDraft) !== chromeAppearanceState.accentColor ||
+    projectIconPathDraft.trim() !== chromeAppearanceState.projectIconPath;
+  const hasUnsavedStartupDraft = defaultUrlDraft.trim() !== chromeAppearanceState.defaultUrl;
+  const savedAgentLoginUsername =
+    projectAgentLoginState.source === 'local-file' ? projectAgentLoginState.username : '';
+  const hasUnsavedAgentLoginDraft =
+    agentLoginUsernameDraft.trim() !== savedAgentLoginUsername ||
+    agentLoginPasswordDraft.length > 0;
+  const canSaveAgentLogin =
+    hasProject &&
+    agentLoginUsernameDraft.trim().length > 0 &&
+    agentLoginPasswordDraft.trim().length > 0;
+  const hasLegacyEnvConfig =
+    chromeAppearanceState.agentLoginUsernameEnv.trim().length > 0 ||
+    chromeAppearanceState.agentLoginPasswordEnv.trim().length > 0;
+  const legacyEnvNames = [
+    chromeAppearanceState.agentLoginUsernameEnv.trim() || null,
+    chromeAppearanceState.agentLoginPasswordEnv.trim() || null,
+  ].filter((value): value is string => Boolean(value));
+  const missingResolvedEnvNames = [
+    chromeAppearanceState.agentLoginUsernameResolved
+      ? null
+      : chromeAppearanceState.agentLoginUsernameEnv || null,
+    chromeAppearanceState.agentLoginPasswordResolved
+      ? null
+      : chromeAppearanceState.agentLoginPasswordEnv || null,
+  ].filter((value): value is string => Boolean(value));
+  const projectAgentLoginError = agentLoginActionError ?? projectAgentLoginState.lastError;
+  const configuredDefaultOrigin = chromeAppearanceState.defaultUrl
+    ? (() => {
+        try {
+          return new URL(chromeAppearanceState.defaultUrl).origin;
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+  const startupStatus = hasUnsavedStartupDraft
+    ? 'Save Default URL to update the project startup target and login CTA scope.'
+    : !chromeAppearanceState.defaultUrl.trim()
+      ? 'Set Default URL to scope Use Agent Login to your app.'
+      : configuredDefaultOrigin
+        ? `Use Agent Login can appear on ${configuredDefaultOrigin} login pages.`
+        : 'Default URL is saved, but it is not a valid URL yet.';
+  const agentLoginStatus =
+    projectAgentLoginState.source === 'local-file'
+      ? projectAgentLoginState.lastError
+        ? 'The repo-local login file needs attention. Save fresh credentials below to replace it.'
+        : hasUnsavedAgentLoginDraft
+          ? 'Enter a password and save to update the repo-local login.'
+          : 'Saved in this repo. On matching login pages, Use Agent Login will fill username and password.'
+      : hasLegacyEnvConfig
+        ? missingResolvedEnvNames.length > 0
+          ? `Legacy env fallback is configured, but ${missingResolvedEnvNames.join(' and ')} must be set before launch.`
+          : legacyEnvNames.length > 0
+            ? `Using legacy env fallback from ${legacyEnvNames.join(' and ')}.`
+            : 'Using legacy env fallback.'
+        : 'Save a repo-local agent login below to enable Use Agent Login on matching login pages.';
 
   return (
     <main className="projectSurface">
@@ -2102,6 +2285,28 @@ const ProjectSurface = ({
                   <div className="projectSurface__metaValue">{chromeAppearanceState.configPath}</div>
                 </div>
                 <div className="projectSurface__metaCard">
+                  <div className="projectSurface__metaLabel">Default URL (startup.defaultUrl)</div>
+                  <div className="projectSurface__metaValue">
+                    {chromeAppearanceState.defaultUrl || 'Not configured in .loop-browser.json'}
+                  </div>
+                </div>
+                <div className="projectSurface__metaCard">
+                  <div className="projectSurface__metaLabel">Agent login file</div>
+                  <div className="projectSurface__metaValue">
+                    {projectAgentLoginState.filePath || 'Not available until a project is selected'}
+                  </div>
+                </div>
+                <div className="projectSurface__metaCard">
+                  <div className="projectSurface__metaLabel">Agent login source</div>
+                  <div className="projectSurface__metaValue">
+                    {projectAgentLoginState.source === 'local-file'
+                      ? 'Repo-local saved login'
+                      : projectAgentLoginState.source === 'legacy-env'
+                        ? 'Legacy env fallback'
+                        : 'Not configured'}
+                  </div>
+                </div>
+                <div className="projectSurface__metaCard">
                   <div className="projectSurface__metaLabel">Dock icon</div>
                   <div className="projectSurface__metaValue">
                     {getDockIconStatusLabel(chromeAppearanceState)}
@@ -2109,6 +2314,14 @@ const ProjectSurface = ({
                 </div>
                 <div className="projectSurface__sectionMeta">
                   Relative icon paths resolve from this project folder.
+                </div>
+                <div className="projectSurface__sectionMeta">
+                  Default URL is read from <code>startup.defaultUrl</code> in
+                  <code> .loop-browser.json </code>.
+                </div>
+                <div className="projectSurface__sectionMeta">
+                  Repo-local agent login is stored in <code>.loop-browser.local.json</code> and
+                  should stay gitignored.
                 </div>
                 {sessionState.role === 'project-session' ? (
                   <div className="projectSurface__sectionMeta">
@@ -2245,8 +2458,8 @@ const ProjectSurface = ({
             <div className="projectSurface__actions">
               <button
                 className="shell__pillButton"
-                disabled={!hasProject || hasDraftErrors}
-                onClick={() => void handleSave()}
+                disabled={!hasProject || hasAppearanceDraftErrors}
+                onClick={() => void handleSaveAppearance()}
                 type="button"
               >
                 Save Style
@@ -2257,7 +2470,159 @@ const ProjectSurface = ({
                 onClick={() => void handleReset()}
                 type="button"
               >
-                Reset
+                Reset Appearance
+              </button>
+            </div>
+          </section>
+
+          <section className="projectSurface__section">
+            <div className="projectSurface__sectionHeader">
+              <div className="projectSurface__sectionTitle">Startup & Agent Login</div>
+              <div className="projectSurface__sectionMeta">
+                Default URL is checked in. Login is repo-local and not exposed through tools.
+              </div>
+            </div>
+
+            <label className="projectSurface__field">
+              <span className="projectSurface__fieldLabel">Default URL</span>
+              <input
+                aria-invalid={defaultUrlError !== null}
+                className="projectSurface__input"
+                disabled={!hasProject}
+                onChange={(event) => setDefaultUrlDraft(event.target.value)}
+                placeholder="http://127.0.0.1:3000"
+                spellCheck={false}
+                type="text"
+                value={defaultUrlDraft}
+              />
+              <div className="projectSurface__sectionMeta">
+                Matching login pages on this origin can show the Use Agent Login CTA.
+              </div>
+              <div className="projectSurface__sectionMeta">{startupStatus}</div>
+              {defaultUrlError ? (
+                <div className="projectSurface__fieldError">{defaultUrlError}</div>
+              ) : null}
+            </label>
+
+            <div className="projectSurface__actions">
+              <button
+                className="shell__pillButton"
+                disabled={!hasProject || defaultUrlError !== null}
+                onClick={() => void handleSaveStartup()}
+                type="button"
+              >
+                Save Startup
+              </button>
+              <button
+                className="shell__pillButton shell__pillButton--muted"
+                disabled={!hasProject || !hasUnsavedStartupDraft}
+                onClick={() => setDefaultUrlDraft(chromeAppearanceState.defaultUrl)}
+                type="button"
+              >
+                Revert URL
+              </button>
+            </div>
+
+            <div className="projectSurface__sectionHeader">
+              <div className="projectSurface__sectionTitle">Agent Login</div>
+              <div className="projectSurface__sectionMeta">
+                Saved to <code>.loop-browser.local.json</code> inside this repo.
+              </div>
+            </div>
+
+            <div className="projectSurface__metaCard">
+              <div className="projectSurface__metaLabel">Saved username</div>
+              <div className="projectSurface__metaValue">
+                {projectAgentLoginState.source === 'local-file' && projectAgentLoginState.username
+                  ? projectAgentLoginState.username
+                  : projectAgentLoginState.lastError
+                    ? 'Saved login could not be read'
+                    : 'No repo-local login saved yet'}
+              </div>
+            </div>
+            <div className="projectSurface__metaCard">
+              <div className="projectSurface__metaLabel">Password saved</div>
+              <div className="projectSurface__metaValue">
+                {projectAgentLoginState.hasPassword ? 'Yes' : 'No'}
+              </div>
+            </div>
+            <div className="projectSurface__metaCard">
+              <div className="projectSurface__metaLabel">Git ignore</div>
+              <div className="projectSurface__metaValue">
+                {projectAgentLoginState.isGitIgnored
+                  ? '.loop-browser.local.json is gitignored'
+                  : '.loop-browser.local.json is not gitignored yet'}
+              </div>
+            </div>
+
+            <label className="projectSurface__field">
+              <span className="projectSurface__fieldLabel">Agent login email or username</span>
+              <input
+                className="projectSurface__input"
+                disabled={!hasProject}
+                onChange={(event) => setAgentLoginUsernameDraft(event.target.value)}
+                placeholder="dev@example.com"
+                spellCheck={false}
+                type="text"
+                value={agentLoginUsernameDraft}
+              />
+            </label>
+
+            <label className="projectSurface__field">
+              <span className="projectSurface__fieldLabel">Agent login password</span>
+              <input
+                className="projectSurface__input"
+                disabled={!hasProject}
+                onChange={(event) => setAgentLoginPasswordDraft(event.target.value)}
+                placeholder="Password"
+                spellCheck={false}
+                type="password"
+                value={agentLoginPasswordDraft}
+              />
+            </label>
+
+            <div className="projectSurface__sectionMeta">{agentLoginStatus}</div>
+            {hasLegacyEnvConfig ? (
+              <div className="projectSurface__sectionMeta">
+                Legacy fallback remains available through
+                <code> agentLogin.usernameEnv </code>
+                and
+                <code> agentLogin.passwordEnv </code>
+                in <code>.loop-browser.json</code>.
+              </div>
+            ) : null}
+            {projectAgentLoginError ? (
+              <div className="projectSurface__error">{projectAgentLoginError}</div>
+            ) : null}
+
+            <div className="projectSurface__actions">
+              <button
+                className="shell__pillButton"
+                disabled={!canSaveAgentLogin}
+                onClick={() => void handleSaveAgentLogin()}
+                type="button"
+              >
+                Save Login
+              </button>
+              <button
+                className="shell__pillButton shell__pillButton--muted"
+                disabled={!hasProject || projectAgentLoginState.source !== 'local-file'}
+                onClick={() => void handleClearAgentLogin()}
+                type="button"
+              >
+                Clear Login
+              </button>
+              <button
+                className="shell__pillButton shell__pillButton--muted"
+                disabled={!hasProject || !hasUnsavedAgentLoginDraft}
+                onClick={() => {
+                  setAgentLoginUsernameDraft(savedAgentLoginUsername);
+                  setAgentLoginPasswordDraft('');
+                  setAgentLoginActionError(null);
+                }}
+                type="button"
+              >
+                Revert Login
               </button>
               <button
                 className="shell__pillButton shell__pillButton--muted"
@@ -2711,6 +3076,7 @@ const FeedbackSurface = (): JSX.Element => {
 export const App = (): JSX.Element => {
   const surfaceMode = getSurfaceMode();
   const chromeAppearanceState = useChromeAppearanceState();
+  const projectAgentLoginState = useProjectAgentLoginState();
   const sessionState = useSessionState();
 
   useEffect(() => {
@@ -2736,6 +3102,7 @@ export const App = (): JSX.Element => {
     return (
       <ProjectSurface
         chromeAppearanceState={chromeAppearanceState}
+        projectAgentLoginState={projectAgentLoginState}
         sessionState={sessionState}
       />
     );

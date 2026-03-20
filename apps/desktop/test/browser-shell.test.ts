@@ -8,6 +8,7 @@ import {
   createEmptyFeedbackState,
   createEmptyMarkdownViewState,
   createEmptyMcpViewState,
+  createEmptyProjectAgentLoginState,
 } from '@agent-browser/protocol';
 import { app, dialog, nativeImage } from 'electron';
 
@@ -87,6 +88,9 @@ const createFakePanelView = () => ({
   webContents: {
     id: Math.floor(Math.random() * 1000) + 1,
     isDestroyed: () => false,
+    loadURL: vi.fn(async () => undefined),
+    reload: vi.fn(),
+    stop: vi.fn(),
     send: vi.fn(),
     getURL: () => 'https://example.com',
     getTitle: () => 'Example Domain',
@@ -120,11 +124,33 @@ const createProjectAppearanceRuntime = () => {
       chromeColor?: string;
       accentColor?: string;
       projectIconPath?: string;
+      defaultUrl?: string;
+      agentLoginUsernameEnv?: string;
+      agentLoginPasswordEnv?: string;
     }) => {
       state = {
         ...state,
         chromeColor: update.chromeColor ?? state.chromeColor,
         accentColor: update.accentColor ?? state.accentColor,
+        defaultUrl: update.defaultUrl ?? state.defaultUrl,
+        agentLoginUsernameEnv:
+          update.agentLoginUsernameEnv ?? state.agentLoginUsernameEnv,
+        agentLoginPasswordEnv:
+          update.agentLoginPasswordEnv ?? state.agentLoginPasswordEnv,
+        agentLoginUsernameResolved: Boolean(
+          (update.agentLoginUsernameEnv ?? state.agentLoginUsernameEnv) &&
+            process.env[update.agentLoginUsernameEnv ?? state.agentLoginUsernameEnv]?.trim(),
+        ),
+        agentLoginPasswordResolved: Boolean(
+          (update.agentLoginPasswordEnv ?? state.agentLoginPasswordEnv) &&
+            process.env[update.agentLoginPasswordEnv ?? state.agentLoginPasswordEnv]?.trim(),
+        ),
+        agentLoginReady: Boolean(
+          (update.agentLoginUsernameEnv ?? state.agentLoginUsernameEnv) &&
+            (update.agentLoginPasswordEnv ?? state.agentLoginPasswordEnv) &&
+            process.env[update.agentLoginUsernameEnv ?? state.agentLoginUsernameEnv]?.trim() &&
+            process.env[update.agentLoginPasswordEnv ?? state.agentLoginPasswordEnv]?.trim(),
+        ),
         projectIconPath: update.projectIconPath ?? state.projectIconPath,
         resolvedProjectIconPath:
           update.projectIconPath === undefined
@@ -483,6 +509,228 @@ describe('BrowserShell', () => {
 
     expect(state.projectRoot).toBe('/tmp/client-project');
     expect(state.configPath).toBe('/tmp/client-project/.loop-browser.json');
+  });
+
+  it('loads the saved project default URL when no explicit startup override is provided', async () => {
+    const projectAppearance = {
+      getState: () => ({
+        ...createEmptyChromeAppearanceState(),
+        projectRoot: '/tmp/project',
+        configPath: '/tmp/project/.loop-browser.json',
+        defaultUrl: 'http://127.0.0.1:3000/',
+      }),
+      subscribe: () => () => undefined,
+      selectProject: async () => createEmptyChromeAppearanceState(),
+      setAppearance: async () => createEmptyChromeAppearanceState(),
+      resetAppearance: async () => createEmptyChromeAppearanceState(),
+      dispose: () => undefined,
+    };
+    const shell = new BrowserShell({
+      projectAppearance,
+    });
+    const subject = shell as unknown as BrowserShellHarness & {
+      loadInitialPage(): Promise<void>;
+    };
+
+    subject.pageView = createFakePanelView();
+
+    await subject.loadInitialPage();
+
+    expect(subject.pageView.webContents.loadURL).toHaveBeenCalledWith('http://127.0.0.1:3000/');
+  });
+
+  it('exposes Use Agent Login CTA state on matching login pages', () => {
+    const previousUsername = process.env.LOOP_AGENT_LOGIN_USERNAME;
+    const previousPassword = process.env.LOOP_AGENT_LOGIN_PASSWORD;
+    process.env.LOOP_AGENT_LOGIN_USERNAME = 'agent@example.com';
+    process.env.LOOP_AGENT_LOGIN_PASSWORD = 'password123';
+
+    try {
+      const projectAppearance = {
+        getState: () => ({
+          ...createEmptyChromeAppearanceState(),
+          projectRoot: '/tmp/project',
+          configPath: '/tmp/project/.loop-browser.json',
+          defaultUrl: 'http://127.0.0.1:3000/',
+          agentLoginUsernameEnv: 'LOOP_AGENT_LOGIN_USERNAME',
+          agentLoginPasswordEnv: 'LOOP_AGENT_LOGIN_PASSWORD',
+          agentLoginUsernameResolved: true,
+          agentLoginPasswordResolved: true,
+          agentLoginReady: true,
+        }),
+        subscribe: () => () => undefined,
+        selectProject: async () => createEmptyChromeAppearanceState(),
+        setAppearance: async () => createEmptyChromeAppearanceState(),
+        resetAppearance: async () => createEmptyChromeAppearanceState(),
+        dispose: () => undefined,
+      };
+      const shell = new BrowserShell({
+        projectAppearance,
+      });
+      const subject = shell as unknown as BrowserShellHarness & {
+        hasVisibleLoginForm: boolean;
+      };
+
+      subject.pageView = createFakePanelView();
+      subject.pageView.webContents.getURL = () => 'http://127.0.0.1:3000/login';
+      subject.hasVisibleLoginForm = true;
+
+      expect(shell.getNavigationState().agentLoginCta).toEqual({
+        visible: true,
+        enabled: true,
+        reason: null,
+      });
+    } finally {
+      if (previousUsername === undefined) {
+        delete process.env.LOOP_AGENT_LOGIN_USERNAME;
+      } else {
+        process.env.LOOP_AGENT_LOGIN_USERNAME = previousUsername;
+      }
+
+      if (previousPassword === undefined) {
+        delete process.env.LOOP_AGENT_LOGIN_PASSWORD;
+      } else {
+        process.env.LOOP_AGENT_LOGIN_PASSWORD = previousPassword;
+      }
+    }
+  });
+
+  it('routes Use Agent Login into the page preload fill command', async () => {
+    const previousUsername = process.env.LOOP_AGENT_LOGIN_USERNAME;
+    const previousPassword = process.env.LOOP_AGENT_LOGIN_PASSWORD;
+    process.env.LOOP_AGENT_LOGIN_USERNAME = 'agent@example.com';
+    process.env.LOOP_AGENT_LOGIN_PASSWORD = 'password123';
+
+    try {
+      const projectAppearance = {
+        getState: () => ({
+          ...createEmptyChromeAppearanceState(),
+          projectRoot: '/tmp/project',
+          configPath: '/tmp/project/.loop-browser.json',
+          defaultUrl: 'http://127.0.0.1:3000/',
+          agentLoginUsernameEnv: 'LOOP_AGENT_LOGIN_USERNAME',
+          agentLoginPasswordEnv: 'LOOP_AGENT_LOGIN_PASSWORD',
+          agentLoginUsernameResolved: true,
+          agentLoginPasswordResolved: true,
+          agentLoginReady: true,
+        }),
+        subscribe: () => () => undefined,
+        selectProject: async () => createEmptyChromeAppearanceState(),
+        setAppearance: async () => createEmptyChromeAppearanceState(),
+        resetAppearance: async () => createEmptyChromeAppearanceState(),
+        dispose: () => undefined,
+      };
+      const shell = new BrowserShell({
+        projectAppearance,
+      });
+      const subject = shell as unknown as BrowserShellHarness & {
+        hasVisibleLoginForm: boolean;
+      };
+
+      subject.pageView = createFakePanelView();
+      subject.pageView.webContents.getURL = () => 'http://127.0.0.1:3000/login';
+      subject.hasVisibleLoginForm = true;
+
+      await shell.executeNavigationCommand({ action: 'useAgentLogin' });
+
+      expect(subject.pageView.webContents.send).toHaveBeenCalledWith('page-login:control', {
+        action: 'fill',
+        username: 'agent@example.com',
+        password: 'password123',
+      });
+    } finally {
+      if (previousUsername === undefined) {
+        delete process.env.LOOP_AGENT_LOGIN_USERNAME;
+      } else {
+        process.env.LOOP_AGENT_LOGIN_USERNAME = previousUsername;
+      }
+
+      if (previousPassword === undefined) {
+        delete process.env.LOOP_AGENT_LOGIN_PASSWORD;
+      } else {
+        process.env.LOOP_AGENT_LOGIN_PASSWORD = previousPassword;
+      }
+    }
+  });
+
+  it('prefers repo-local saved login over the legacy env fallback', async () => {
+    const previousUsername = process.env.LOOP_AGENT_LOGIN_USERNAME;
+    const previousPassword = process.env.LOOP_AGENT_LOGIN_PASSWORD;
+    process.env.LOOP_AGENT_LOGIN_USERNAME = 'env@example.com';
+    process.env.LOOP_AGENT_LOGIN_PASSWORD = 'env-password';
+
+    try {
+      const projectAppearance = {
+        getState: () => ({
+          ...createEmptyChromeAppearanceState(),
+          projectRoot: '/tmp/project',
+          configPath: '/tmp/project/.loop-browser.json',
+          defaultUrl: 'http://127.0.0.1:3000/',
+          agentLoginUsernameEnv: 'LOOP_AGENT_LOGIN_USERNAME',
+          agentLoginPasswordEnv: 'LOOP_AGENT_LOGIN_PASSWORD',
+          agentLoginUsernameResolved: true,
+          agentLoginPasswordResolved: true,
+          agentLoginReady: true,
+        }),
+        subscribe: () => () => undefined,
+        selectProject: async () => createEmptyChromeAppearanceState(),
+        setAppearance: async () => createEmptyChromeAppearanceState(),
+        resetAppearance: async () => createEmptyChromeAppearanceState(),
+        dispose: () => undefined,
+      };
+      const projectAgentLogin = {
+        getState: () => ({
+          ...createEmptyProjectAgentLoginState(),
+          projectRoot: '/tmp/project',
+          filePath: '/tmp/project/.loop-browser.local.json',
+          username: 'repo@example.com',
+          hasPassword: true,
+          isGitIgnored: true,
+          source: 'local-file' as const,
+        }),
+        subscribe: () => () => undefined,
+        selectProject: async () => createEmptyProjectAgentLoginState(),
+        saveLogin: async () => createEmptyProjectAgentLoginState(),
+        clearLogin: async () => createEmptyProjectAgentLoginState(),
+        resolveLocalCredentials: () => ({
+          username: 'repo@example.com',
+          password: 'repo-password',
+        }),
+        dispose: () => undefined,
+      };
+      const shell = new BrowserShell({
+        projectAppearance,
+        projectAgentLogin,
+      });
+      const subject = shell as unknown as BrowserShellHarness & {
+        hasVisibleLoginForm: boolean;
+      };
+
+      subject.pageView = createFakePanelView();
+      subject.pageView.webContents.getURL = () => 'http://127.0.0.1:3000/login';
+      subject.hasVisibleLoginForm = true;
+
+      await shell.executeNavigationCommand({ action: 'useAgentLogin' });
+
+      expect(shell.getProjectAgentLoginState().source).toBe('local-file');
+      expect(subject.pageView.webContents.send).toHaveBeenCalledWith('page-login:control', {
+        action: 'fill',
+        username: 'repo@example.com',
+        password: 'repo-password',
+      });
+    } finally {
+      if (previousUsername === undefined) {
+        delete process.env.LOOP_AGENT_LOGIN_USERNAME;
+      } else {
+        process.env.LOOP_AGENT_LOGIN_USERNAME = previousUsername;
+      }
+
+      if (previousPassword === undefined) {
+        delete process.env.LOOP_AGENT_LOGIN_PASSWORD;
+      } else {
+        process.env.LOOP_AGENT_LOGIN_PASSWORD = previousPassword;
+      }
+    }
   });
 
   it('returns a project-relative icon path from the native icon picker', async () => {

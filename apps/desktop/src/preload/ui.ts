@@ -19,6 +19,10 @@ import {
   PICKER_COMMAND_CHANNEL,
   PICKER_GET_STATE_CHANNEL,
   PICKER_STATE_CHANNEL,
+  PROJECT_AGENT_LOGIN_CLEAR_CHANNEL,
+  PROJECT_AGENT_LOGIN_GET_STATE_CHANNEL,
+  PROJECT_AGENT_LOGIN_SAVE_CHANNEL,
+  PROJECT_AGENT_LOGIN_STATE_CHANNEL,
   SESSION_COMMAND_CHANNEL,
   SESSION_GET_STATE_CHANNEL,
   SESSION_STATE_CHANNEL,
@@ -37,6 +41,8 @@ import {
   type PickerCommand,
   type PickerState,
   type NavigationState,
+  type ProjectAgentLoginSaveRequest,
+  type ProjectAgentLoginState,
 } from '@agent-browser/protocol';
 
 const navigationBridge: NavigationBridge = {
@@ -144,6 +150,32 @@ const navigationBridge: NavigationBridge = {
   },
   browseProjectIcon(): Promise<string | null> {
     return ipcRenderer.invoke(CHROME_APPEARANCE_BROWSE_ICON_CHANNEL) as Promise<string | null>;
+  },
+  getProjectAgentLoginState(): Promise<ProjectAgentLoginState> {
+    return ipcRenderer.invoke(
+      PROJECT_AGENT_LOGIN_GET_STATE_CHANNEL,
+    ) as Promise<ProjectAgentLoginState>;
+  },
+  subscribeProjectAgentLogin(listener: (state: ProjectAgentLoginState) => void): () => void {
+    const wrapped = (_event: Electron.IpcRendererEvent, state: ProjectAgentLoginState): void => {
+      listener(state);
+    };
+
+    ipcRenderer.on(PROJECT_AGENT_LOGIN_STATE_CHANNEL, wrapped);
+    return () => {
+      ipcRenderer.removeListener(PROJECT_AGENT_LOGIN_STATE_CHANNEL, wrapped);
+    };
+  },
+  saveProjectAgentLogin(request: ProjectAgentLoginSaveRequest): Promise<ProjectAgentLoginState> {
+    return ipcRenderer.invoke(
+      PROJECT_AGENT_LOGIN_SAVE_CHANNEL,
+      request,
+    ) as Promise<ProjectAgentLoginState>;
+  },
+  clearProjectAgentLogin(): Promise<ProjectAgentLoginState> {
+    return ipcRenderer.invoke(
+      PROJECT_AGENT_LOGIN_CLEAR_CHANNEL,
+    ) as Promise<ProjectAgentLoginState>;
   },
   executeFeedback(command: FeedbackCommand): Promise<FeedbackState> {
     return ipcRenderer.invoke(FEEDBACK_COMMAND_CHANNEL, command) as Promise<FeedbackState>;

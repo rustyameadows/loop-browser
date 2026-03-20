@@ -1,9 +1,12 @@
 import { ipcRenderer } from 'electron';
 import {
   PAGE_AGENT_OVERLAY_CHANNEL,
+  PAGE_LOGIN_CONTROL_CHANNEL,
+  PAGE_LOGIN_EVENT_CHANNEL,
   PAGE_PICKER_CONTROL_CHANNEL,
   PAGE_PICKER_EVENT_CHANNEL,
   isPageAgentOverlayState,
+  isPageLoginControl,
   isPagePickerControl,
   type PageAgentOverlayState,
 } from '@agent-browser/protocol';
@@ -14,6 +17,7 @@ import {
   createStableSelector,
   inferRole,
 } from '@agent-browser/selector';
+import { fillAgentLogin, hasVisibleLoginForm } from './page-login';
 
 const OVERLAY_ROOT_ID = '__agent_browser_picker_overlay__';
 const AGENT_DONE_PULSE_MS = 1600;
@@ -35,6 +39,9 @@ const state: {
   animationFrame: number | null;
   agentOverlay: PageAgentOverlayState | null;
   agentClearTimer: number | null;
+  hasVisibleLoginForm: boolean;
+  loginFormAnimationFrame: number | null;
+  loginFormObserver: MutationObserver | null;
 } = {
   enabled: false,
   hoveredElement: null,
@@ -43,6 +50,9 @@ const state: {
   animationFrame: null,
   agentOverlay: null,
   agentClearTimer: null,
+  hasVisibleLoginForm: false,
+  loginFormAnimationFrame: null,
+  loginFormObserver: null,
 };
 
 const describeElement = (element: Element): { title: string; meta: string } => {
@@ -510,6 +520,58 @@ const setAgentOverlay = (payload: PageAgentOverlayState | null): void => {
   renderOverlay();
 };
 
+const publishLoginFormAvailability = (): void => {
+  const nextValue = hasVisibleLoginForm(document);
+  if (state.hasVisibleLoginForm === nextValue) {
+    return;
+  }
+
+  state.hasVisibleLoginForm = nextValue;
+  ipcRenderer.send(PAGE_LOGIN_EVENT_CHANNEL, {
+    type: 'availability',
+    hasVisibleLoginForm: nextValue,
+  });
+};
+
+const scheduleLoginFormAvailabilityCheck = (): void => {
+  if (state.loginFormAnimationFrame !== null) {
+    return;
+  }
+
+  state.loginFormAnimationFrame = window.requestAnimationFrame(() => {
+    state.loginFormAnimationFrame = null;
+    publishLoginFormAvailability();
+  });
+};
+
+const observeLoginForms = (): void => {
+  if (state.loginFormObserver || !document.documentElement) {
+    return;
+  }
+
+  state.loginFormObserver = new MutationObserver(() => {
+    scheduleLoginFormAvailabilityCheck();
+  });
+  state.loginFormObserver.observe(document.documentElement, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: [
+      'aria-hidden',
+      'autocomplete',
+      'class',
+      'disabled',
+      'hidden',
+      'id',
+      'name',
+      'placeholder',
+      'readonly',
+      'style',
+      'type',
+    ],
+  });
+};
+
 window.addEventListener(
   'mousemove',
   (event) => {
@@ -579,6 +641,33 @@ window.addEventListener(
   true,
 );
 
+window.addEventListener('DOMContentLoaded', () => {
+  observeLoginForms();
+  scheduleLoginFormAvailabilityCheck();
+});
+
+window.addEventListener('load', () => {
+  scheduleLoginFormAvailabilityCheck();
+});
+
+window.addEventListener(
+  'pageshow',
+  () => {
+    scheduleLoginFormAvailabilityCheck();
+  },
+  true,
+);
+
+window.addEventListener('beforeunload', () => {
+  if (state.loginFormAnimationFrame !== null) {
+    window.cancelAnimationFrame(state.loginFormAnimationFrame);
+    state.loginFormAnimationFrame = null;
+  }
+
+  state.loginFormObserver?.disconnect();
+  state.loginFormObserver = null;
+});
+
 ipcRenderer.on(PAGE_PICKER_CONTROL_CHANNEL, (_event, payload: unknown) => {
   if (!isPagePickerControl(payload)) {
     return;
@@ -590,6 +679,18 @@ ipcRenderer.on(PAGE_PICKER_CONTROL_CHANNEL, (_event, payload: unknown) => {
   }
 
   disablePicker(false);
+});
+
+ipcRenderer.on(PAGE_LOGIN_CONTROL_CHANNEL, (_event, payload: unknown) => {
+  if (!isPageLoginControl(payload) || payload.action !== 'fill') {
+    return;
+  }
+
+  fillAgentLogin(document, {
+    username: payload.username,
+    password: payload.password,
+  });
+  scheduleLoginFormAvailabilityCheck();
 });
 
 ipcRenderer.on(PAGE_AGENT_OVERLAY_CHANNEL, (_event, payload: unknown) => {
@@ -604,3 +705,6 @@ ipcRenderer.on(PAGE_AGENT_OVERLAY_CHANNEL, (_event, payload: unknown) => {
 
   setAgentOverlay(payload);
 });
+
+observeLoginForms();
+scheduleLoginFormAvailabilityCheck();

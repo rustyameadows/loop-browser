@@ -11,6 +11,7 @@ import {
   deriveProjectSessionSlug,
   type ProjectAppearanceRuntime,
 } from './project-appearance';
+import { ProjectAgentLoginController } from './project-agent-login';
 import { resolveRuntimeConfig } from './runtime-config';
 import {
   deriveClusterDir,
@@ -124,6 +125,7 @@ const createProjectSessionBootstrap = (): {
     path.join(app.getPath('userData'), PROJECT_SELECTION_FILE_NAME),
     runtimeConfig.projectRoot,
   );
+  const projectAgentLoginStore = new ProjectAgentLoginController(runtimeConfig.projectRoot);
   const launcherRegistrationFile = path.join(clusterDir, 'mcp-registration.json');
   const launcherConnectionInfo = loadRegistrationConnectionInfo(launcherRegistrationFile);
   const sessionController = new SessionDirectoryController({
@@ -134,6 +136,7 @@ const createProjectSessionBootstrap = (): {
   const browserShell = new BrowserShell({
     initialUrl: runtimeConfig.startUrl ?? undefined,
     projectAppearance: projectAppearanceStore,
+    projectAgentLogin: projectAgentLoginStore,
     sessionRuntime: sessionController,
     role: 'project-session',
   });
@@ -216,6 +219,7 @@ const createProjectSessionBootstrap = (): {
         console.error('Failed to stop Loop Browser project session tool server cleanly.', error);
       });
       await sessionController.dispose();
+      projectAgentLoginStore.dispose();
       projectAppearanceStore.dispose();
       browserShell.dispose();
     },

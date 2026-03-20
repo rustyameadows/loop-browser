@@ -8,6 +8,7 @@ import {
   DEFAULT_CHROME_COLOR,
   type ChromeAppearanceState,
 } from '@agent-browser/protocol';
+import { normalizeAddress } from './url';
 
 export const PROJECT_CONFIG_FILE_NAME = '.loop-browser.json';
 export const PROJECT_SELECTION_FILE_NAME = 'project-selection.json';
@@ -22,6 +23,13 @@ type ProjectChromeConfigDocument = {
     accentColor?: unknown;
     projectIconPath?: unknown;
   };
+  startup?: {
+    defaultUrl?: unknown;
+  };
+  agentLogin?: {
+    usernameEnv?: unknown;
+    passwordEnv?: unknown;
+  };
 };
 
 type ProjectSelectionDocument = {
@@ -33,6 +41,9 @@ export type ProjectAppearanceUpdate = {
   chromeColor?: string;
   accentColor?: string;
   projectIconPath?: string;
+  defaultUrl?: string;
+  agentLoginUsernameEnv?: string;
+  agentLoginPasswordEnv?: string;
 };
 
 export interface ProjectAppearanceRuntime {
@@ -55,7 +66,35 @@ const normalizeHexColor = (value: string, fieldName: string): string => {
   return normalized;
 };
 
-const trimOptionalPath = (value: string): string => value.trim();
+const trimOptionalText = (value: string): string => value.trim();
+const trimOptionalPath = (value: string): string => trimOptionalText(value);
+
+const normalizeDefaultUrl = (value: string): string => {
+  const trimmed = trimOptionalText(value);
+  return trimmed ? normalizeAddress(trimmed) : '';
+};
+
+const resolveAgentLoginFlags = (
+  usernameEnv: string,
+  passwordEnv: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Pick<
+  ChromeAppearanceState,
+  'agentLoginUsernameResolved' | 'agentLoginPasswordResolved' | 'agentLoginReady'
+> => {
+  const agentLoginUsernameResolved = Boolean(usernameEnv && env[usernameEnv]?.trim());
+  const agentLoginPasswordResolved = Boolean(passwordEnv && env[passwordEnv]?.trim());
+
+  return {
+    agentLoginUsernameResolved,
+    agentLoginPasswordResolved,
+    agentLoginReady:
+      usernameEnv.length > 0 &&
+      passwordEnv.length > 0 &&
+      agentLoginUsernameResolved &&
+      agentLoginPasswordResolved,
+  };
+};
 
 const resolveProjectIconInfo = (
   projectRoot: string,
@@ -109,6 +148,12 @@ export const createProjectAppearanceState = (projectRoot: string | null): Chrome
   accentColor: DEFAULT_ACCENT_COLOR,
   projectIconPath: '',
   resolvedProjectIconPath: null,
+  defaultUrl: '',
+  agentLoginUsernameEnv: '',
+  agentLoginPasswordEnv: '',
+  agentLoginUsernameResolved: false,
+  agentLoginPasswordResolved: false,
+  agentLoginReady: false,
   dockIconStatus: 'idle',
   dockIconSource: 'chromeColor',
   dockIconLastError: null,
@@ -118,6 +163,7 @@ export const createProjectAppearanceState = (projectRoot: string | null): Chrome
 const parseProjectAppearanceDocument = (
   document: ProjectChromeConfigDocument,
   projectRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
 ): ChromeAppearanceState => {
   if (document.version !== CONFIG_VERSION) {
     throw new Error(`Project config version must be ${CONFIG_VERSION}.`);
@@ -125,6 +171,20 @@ const parseProjectAppearanceDocument = (
 
   if (document.chrome !== undefined && (typeof document.chrome !== 'object' || document.chrome === null)) {
     throw new Error('Project config "chrome" must be an object.');
+  }
+
+  if (
+    document.startup !== undefined &&
+    (typeof document.startup !== 'object' || document.startup === null)
+  ) {
+    throw new Error('Project config "startup" must be an object.');
+  }
+
+  if (
+    document.agentLogin !== undefined &&
+    (typeof document.agentLogin !== 'object' || document.agentLogin === null)
+  ) {
+    throw new Error('Project config "agentLogin" must be an object.');
   }
 
   const chromeColor =
@@ -155,6 +215,35 @@ const parseProjectAppearanceDocument = (
           })();
 
   const iconInfo = resolveProjectIconInfo(projectRoot, rawProjectIconPath);
+  const defaultUrl =
+    document.startup?.defaultUrl === undefined
+      ? ''
+      : typeof document.startup.defaultUrl === 'string'
+        ? normalizeDefaultUrl(document.startup.defaultUrl)
+        : (() => {
+            throw new Error('startup.defaultUrl must be a string.');
+          })();
+  const agentLoginUsernameEnv =
+    document.agentLogin?.usernameEnv === undefined
+      ? ''
+      : typeof document.agentLogin.usernameEnv === 'string'
+        ? trimOptionalText(document.agentLogin.usernameEnv)
+        : (() => {
+            throw new Error('agentLogin.usernameEnv must be a string.');
+          })();
+  const agentLoginPasswordEnv =
+    document.agentLogin?.passwordEnv === undefined
+      ? ''
+      : typeof document.agentLogin.passwordEnv === 'string'
+        ? trimOptionalText(document.agentLogin.passwordEnv)
+        : (() => {
+            throw new Error('agentLogin.passwordEnv must be a string.');
+          })();
+  const agentLoginFlags = resolveAgentLoginFlags(
+    agentLoginUsernameEnv,
+    agentLoginPasswordEnv,
+    env,
+  );
 
   return {
     ...createProjectAppearanceState(projectRoot),
@@ -162,6 +251,10 @@ const parseProjectAppearanceDocument = (
     accentColor,
     projectIconPath: iconInfo.projectIconPath,
     resolvedProjectIconPath: iconInfo.resolvedProjectIconPath,
+    defaultUrl,
+    agentLoginUsernameEnv,
+    agentLoginPasswordEnv,
+    ...agentLoginFlags,
     lastError: iconInfo.warning,
   };
 };
@@ -169,6 +262,7 @@ const parseProjectAppearanceDocument = (
 export const parseProjectAppearanceConfig = (
   raw: string,
   projectRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
 ): ChromeAppearanceState => {
   let parsed: ProjectChromeConfigDocument;
   try {
@@ -181,7 +275,7 @@ export const parseProjectAppearanceConfig = (
     throw new Error('Project config must be an object.');
   }
 
-  return parseProjectAppearanceDocument(parsed, projectRoot);
+  return parseProjectAppearanceDocument(parsed, projectRoot, env);
 };
 
 const serializeProjectAppearanceConfig = (state: ChromeAppearanceState): string => {
@@ -194,10 +288,30 @@ const serializeProjectAppearanceConfig = (state: ChromeAppearanceState): string 
     chrome.projectIconPath = state.projectIconPath;
   }
 
+  const startup =
+    state.defaultUrl.length > 0
+      ? {
+          defaultUrl: state.defaultUrl,
+        }
+      : undefined;
+  const agentLogin =
+    state.agentLoginUsernameEnv.length > 0 || state.agentLoginPasswordEnv.length > 0
+      ? {
+          ...(state.agentLoginUsernameEnv.length > 0
+            ? { usernameEnv: state.agentLoginUsernameEnv }
+            : {}),
+          ...(state.agentLoginPasswordEnv.length > 0
+            ? { passwordEnv: state.agentLoginPasswordEnv }
+            : {}),
+        }
+      : undefined;
+
   return `${JSON.stringify(
     {
       version: CONFIG_VERSION,
       chrome,
+      ...(startup ? { startup } : {}),
+      ...(agentLogin ? { agentLogin } : {}),
     },
     null,
     2,
@@ -327,7 +441,21 @@ export class ProjectAppearanceStore implements ProjectAppearanceRuntime {
         : normalizeHexColor(update.accentColor, 'accentColor');
     const projectIconPath =
       update.projectIconPath === undefined ? this.state.projectIconPath : update.projectIconPath;
+    const defaultUrl =
+      update.defaultUrl === undefined ? this.state.defaultUrl : normalizeDefaultUrl(update.defaultUrl);
+    const agentLoginUsernameEnv =
+      update.agentLoginUsernameEnv === undefined
+        ? this.state.agentLoginUsernameEnv
+        : trimOptionalText(update.agentLoginUsernameEnv);
+    const agentLoginPasswordEnv =
+      update.agentLoginPasswordEnv === undefined
+        ? this.state.agentLoginPasswordEnv
+        : trimOptionalText(update.agentLoginPasswordEnv);
     const iconInfo = resolveProjectIconInfo(this.projectRoot, projectIconPath);
+    const agentLoginFlags = resolveAgentLoginFlags(
+      agentLoginUsernameEnv,
+      agentLoginPasswordEnv,
+    );
 
     return {
       ...this.state,
@@ -335,6 +463,10 @@ export class ProjectAppearanceStore implements ProjectAppearanceRuntime {
       accentColor,
       projectIconPath: iconInfo.projectIconPath,
       resolvedProjectIconPath: iconInfo.resolvedProjectIconPath,
+      defaultUrl,
+      agentLoginUsernameEnv,
+      agentLoginPasswordEnv,
+      ...agentLoginFlags,
       lastError: iconInfo.warning,
     };
   }

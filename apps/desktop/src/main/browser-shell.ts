@@ -37,15 +37,22 @@ import {
   NAVIGATION_COMMAND_CHANNEL,
   NAVIGATION_GET_STATE_CHANNEL,
   NAVIGATION_STATE_CHANNEL,
+  PAGE_LOGIN_CONTROL_CHANNEL,
+  PAGE_LOGIN_EVENT_CHANNEL,
   PAGE_AGENT_OVERLAY_CHANNEL,
   PAGE_PICKER_CONTROL_CHANNEL,
   PAGE_PICKER_EVENT_CHANNEL,
   PICKER_COMMAND_CHANNEL,
   PICKER_GET_STATE_CHANNEL,
   PICKER_STATE_CHANNEL,
+  PROJECT_AGENT_LOGIN_CLEAR_CHANNEL,
+  PROJECT_AGENT_LOGIN_GET_STATE_CHANNEL,
+  PROJECT_AGENT_LOGIN_SAVE_CHANNEL,
+  PROJECT_AGENT_LOGIN_STATE_CHANNEL,
   SESSION_COMMAND_CHANNEL,
   SESSION_GET_STATE_CHANNEL,
   SESSION_STATE_CHANNEL,
+  createEmptyProjectAgentLoginState,
   createEmptyFeedbackDraft,
   createEmptyFeedbackState,
   createEmptyMcpViewState,
@@ -58,7 +65,9 @@ import {
   isMcpViewCommand,
   isMarkdownViewCommand,
   isNavigationCommand,
+  isProjectAgentLoginSaveRequest,
   isPagePickerEvent,
+  isPageLoginEvent,
   isPickerCommand,
   isSessionCommand,
   type ChromeAppearanceCommand,
@@ -73,9 +82,11 @@ import {
   type MarkdownViewState,
   type NavigationCommand,
   type NavigationState,
+  type AgentLoginCtaState,
   type PageAgentOverlayState,
   type PickerCommand,
   type PickerState,
+  type ProjectAgentLoginState,
   type SessionCommand,
   type SessionViewState,
 } from '@agent-browser/protocol';
@@ -93,6 +104,10 @@ import {
   toProjectRelativePath,
   type ProjectAppearanceRuntime,
 } from './project-appearance';
+import {
+  ProjectAgentLoginController,
+  type ProjectAgentLoginRuntime,
+} from './project-agent-login';
 import {
   CHROME_HEIGHT,
   SIDE_PANEL_BREAKPOINT,
@@ -143,6 +158,7 @@ export interface BrowserTabSnapshot {
 interface BrowserShellOptions {
   initialUrl?: string;
   projectAppearance?: ProjectAppearanceRuntime;
+  projectAgentLogin?: ProjectAgentLoginRuntime;
   dockIconTemplatePath?: string;
   sessionRuntime?: BrowserSessionRuntime;
   role?: SessionViewState['role'];
@@ -167,19 +183,25 @@ export class BrowserShell {
   private feedbackPanelMounted = false;
   private projectPanelMounted = false;
   private lastError: string | null = null;
+  private hasVisibleLoginForm = false;
   private pickerState: PickerState = createEmptyPickerState();
   private sessionState: SessionViewState = createEmptySessionViewState();
   private feedbackState: FeedbackState = createEmptyFeedbackState();
   private markdownViewState: MarkdownViewState = createEmptyMarkdownViewState();
   private mcpViewState: McpViewState = createEmptyMcpViewState();
   private chromeAppearanceState: ChromeAppearanceState = createEmptyChromeAppearanceState();
+  private projectAgentLoginState: ProjectAgentLoginState =
+    createEmptyProjectAgentLoginState();
   private markdownRequestId = 0;
   private mcpDiagnosticsSource: McpDiagnosticsSource | null = null;
   private mcpDiagnosticsUnsubscribe: (() => void) | null = null;
   private readonly projectAppearance: ProjectAppearanceRuntime;
   private readonly disposeProjectAppearance: boolean;
+  private readonly projectAgentLogin: ProjectAgentLoginRuntime;
+  private readonly disposeProjectAgentLogin: boolean;
   private readonly projectDockTemplatePath: string;
   private readonly projectAppearanceUnsubscribe: () => void;
+  private readonly projectAgentLoginUnsubscribe: () => void;
   private readonly sessionRuntime: BrowserSessionRuntime | null;
   private readonly sessionRuntimeUnsubscribe: (() => void) | null;
   private readonly role: SessionViewState['role'];
@@ -195,6 +217,10 @@ export class BrowserShell {
       options.projectAppearance ??
       new ProjectAppearanceController(path.join(app.getPath('userData'), PROJECT_SELECTION_FILE_NAME));
     this.disposeProjectAppearance = !options.projectAppearance;
+    this.projectAgentLogin =
+      options.projectAgentLogin ??
+      new ProjectAgentLoginController(this.projectAppearance.getState().projectRoot || null);
+    this.disposeProjectAgentLogin = !options.projectAgentLogin;
     this.projectDockTemplatePath =
       options.dockIconTemplatePath ??
       dockIconTemplatePath({
@@ -206,6 +232,9 @@ export class BrowserShell {
       ...this.mergeChromeAppearanceDiagnostics(this.projectAppearance.getState()),
       isOpen: false,
     };
+    this.projectAgentLoginState = this.createProjectAgentLoginState(
+      this.projectAgentLogin.getState(),
+    );
     this.sessionRuntime = options.sessionRuntime ?? null;
     this.sessionState = this.sessionRuntime?.getState() ?? {
       ...createEmptySessionViewState(),
@@ -214,6 +243,7 @@ export class BrowserShell {
     this.syncLauncherDockVisibility();
     this.registerIpcHandlers();
     this.projectAppearanceUnsubscribe = this.projectAppearance.subscribe((state) => {
+      const previousProjectRoot = this.chromeAppearanceState.projectRoot;
       this.chromeAppearanceState = {
         ...this.mergeChromeAppearanceDiagnostics(state),
         isOpen: this.chromeAppearanceState.isOpen,
@@ -221,6 +251,20 @@ export class BrowserShell {
       this.applyChromeAppearance();
       void this.syncDockIcon();
       this.sendChromeAppearanceState();
+      if (state.projectRoot !== previousProjectRoot) {
+        void this.syncProjectAgentLoginProjectRoot(state.projectRoot);
+      } else {
+        this.projectAgentLoginState = this.createProjectAgentLoginState(
+          this.projectAgentLogin.getState(),
+        );
+        this.sendProjectAgentLoginState();
+      }
+      this.sendNavigationState();
+    });
+    this.projectAgentLoginUnsubscribe = this.projectAgentLogin.subscribe((state) => {
+      this.projectAgentLoginState = this.createProjectAgentLoginState(state);
+      this.sendProjectAgentLoginState();
+      this.sendNavigationState();
     });
     this.sessionRuntimeUnsubscribe = this.sessionRuntime
       ? this.sessionRuntime.subscribe((state) => {
@@ -288,15 +332,23 @@ export class BrowserShell {
     ipcMain.removeHandler(MCP_VIEW_GET_STATE_CHANNEL);
     ipcMain.removeHandler(CHROME_APPEARANCE_COMMAND_CHANNEL);
     ipcMain.removeHandler(CHROME_APPEARANCE_GET_STATE_CHANNEL);
+    ipcMain.removeHandler(PROJECT_AGENT_LOGIN_GET_STATE_CHANNEL);
+    ipcMain.removeHandler(PROJECT_AGENT_LOGIN_SAVE_CHANNEL);
+    ipcMain.removeHandler(PROJECT_AGENT_LOGIN_CLEAR_CHANNEL);
     ipcMain.removeHandler(FEEDBACK_COMMAND_CHANNEL);
     ipcMain.removeHandler(FEEDBACK_GET_STATE_CHANNEL);
     ipcMain.removeAllListeners(PAGE_PICKER_EVENT_CHANNEL);
+    ipcMain.removeAllListeners(PAGE_LOGIN_EVENT_CHANNEL);
     this.mcpDiagnosticsUnsubscribe?.();
     this.mcpDiagnosticsUnsubscribe = null;
     this.projectAppearanceUnsubscribe();
+    this.projectAgentLoginUnsubscribe();
     this.sessionRuntimeUnsubscribe?.();
     if (this.disposeProjectAppearance) {
       this.projectAppearance.dispose();
+    }
+    if (this.disposeProjectAgentLogin) {
+      this.projectAgentLogin.dispose();
     }
     this.destroyWindow();
   }
@@ -426,6 +478,10 @@ export class BrowserShell {
 
   getChromeAppearanceState(): ChromeAppearanceState {
     return { ...this.chromeAppearanceState };
+  }
+
+  getProjectAgentLoginState(): ProjectAgentLoginState {
+    return { ...this.projectAgentLoginState };
   }
 
   getSessionState(): SessionViewState {
@@ -649,6 +705,9 @@ export class BrowserShell {
         const nextState = await this.projectAppearance.setAppearance({
           chromeColor: command.chromeColor,
           accentColor: command.accentColor,
+          defaultUrl: command.defaultUrl,
+          agentLoginUsernameEnv: command.agentLoginUsernameEnv,
+          agentLoginPasswordEnv: command.agentLoginPasswordEnv,
           projectIconPath: command.projectIconPath,
         });
         this.chromeAppearanceState = {
@@ -808,9 +867,13 @@ export class BrowserShell {
     ipcMain.removeHandler(MCP_VIEW_GET_STATE_CHANNEL);
     ipcMain.removeHandler(CHROME_APPEARANCE_COMMAND_CHANNEL);
     ipcMain.removeHandler(CHROME_APPEARANCE_GET_STATE_CHANNEL);
+    ipcMain.removeHandler(PROJECT_AGENT_LOGIN_GET_STATE_CHANNEL);
+    ipcMain.removeHandler(PROJECT_AGENT_LOGIN_SAVE_CHANNEL);
+    ipcMain.removeHandler(PROJECT_AGENT_LOGIN_CLEAR_CHANNEL);
     ipcMain.removeHandler(FEEDBACK_COMMAND_CHANNEL);
     ipcMain.removeHandler(FEEDBACK_GET_STATE_CHANNEL);
     ipcMain.removeAllListeners(PAGE_PICKER_EVENT_CHANNEL);
+    ipcMain.removeAllListeners(PAGE_LOGIN_EVENT_CHANNEL);
 
     ipcMain.handle(
       NAVIGATION_COMMAND_CHANNEL,
@@ -943,6 +1006,35 @@ export class BrowserShell {
     });
 
     ipcMain.handle(
+      PROJECT_AGENT_LOGIN_GET_STATE_CHANNEL,
+      async (event: IpcMainInvokeEvent): Promise<ProjectAgentLoginState> => {
+        this.assertTrustedSender(event);
+        return this.getProjectAgentLoginState();
+      },
+    );
+
+    ipcMain.handle(
+      PROJECT_AGENT_LOGIN_SAVE_CHANNEL,
+      async (event: IpcMainInvokeEvent, payload: unknown): Promise<ProjectAgentLoginState> => {
+        this.assertTrustedSender(event);
+
+        if (!isProjectAgentLoginSaveRequest(payload)) {
+          throw new Error('Invalid project agent login payload.');
+        }
+
+        return this.saveProjectAgentLogin(payload);
+      },
+    );
+
+    ipcMain.handle(
+      PROJECT_AGENT_LOGIN_CLEAR_CHANNEL,
+      async (event: IpcMainInvokeEvent): Promise<ProjectAgentLoginState> => {
+        this.assertTrustedSender(event);
+        return this.clearProjectAgentLogin();
+      },
+    );
+
+    ipcMain.handle(
       CHROME_APPEARANCE_BROWSE_ICON_CHANNEL,
       async (event: IpcMainInvokeEvent): Promise<string | null> => {
         this.assertTrustedSender(event);
@@ -997,6 +1089,23 @@ export class BrowserShell {
 
       this.sendPickerState();
     });
+
+    ipcMain.on(PAGE_LOGIN_EVENT_CHANNEL, (event: IpcMainEvent, payload: unknown) => {
+      if (!this.pageView || event.sender.id !== this.pageView.webContents.id) {
+        return;
+      }
+
+      if (!isPageLoginEvent(payload) || payload.type !== 'availability') {
+        return;
+      }
+
+      if (this.hasVisibleLoginForm === payload.hasVisibleLoginForm) {
+        return;
+      }
+
+      this.hasVisibleLoginForm = payload.hasVisibleLoginForm;
+      this.sendNavigationState();
+    });
   }
 
   private assertChromeSender(event: IpcMainInvokeEvent): void {
@@ -1042,6 +1151,7 @@ export class BrowserShell {
 
     webContents.on('did-start-loading', () => {
       this.lastError = null;
+      this.hasVisibleLoginForm = false;
       this.resetPickerOnNavigation();
       this.invalidateMarkdownCache();
       this.sendNavigationState();
@@ -1147,7 +1257,7 @@ export class BrowserShell {
     }
 
     const initialUrl =
-      this.options.initialUrl ??
+      (this.options.initialUrl ?? this.chromeAppearanceState.defaultUrl) ||
       fixtureFileUrl({
         appPath: app.getAppPath(),
         isPackaged: app.isPackaged,
@@ -1291,6 +1401,9 @@ export class BrowserShell {
         if (navigationHistory.canGoForward()) {
           navigationHistory.goForward();
         }
+        break;
+      case 'useAgentLogin':
+        this.fillAgentLoginIntoPage();
         break;
       default:
         break;
@@ -2071,6 +2184,219 @@ export class BrowserShell {
     return null;
   }
 
+  private getConfiguredAgentLoginOrigin(): string | null {
+    const defaultUrl = this.chromeAppearanceState.defaultUrl.trim();
+    if (!defaultUrl) {
+      return null;
+    }
+
+    try {
+      return new URL(defaultUrl).origin;
+    } catch {
+      return null;
+    }
+  }
+
+  private createProjectAgentLoginState(
+    state: ProjectAgentLoginState = this.projectAgentLogin.getState(),
+  ): ProjectAgentLoginState {
+    const hasLocalFileState = state.hasPassword || state.lastError !== null;
+    const hasLegacyConfig =
+      this.chromeAppearanceState.agentLoginUsernameEnv.trim().length > 0 ||
+      this.chromeAppearanceState.agentLoginPasswordEnv.trim().length > 0;
+
+    return {
+      ...state,
+      source: hasLocalFileState ? 'local-file' : hasLegacyConfig ? 'legacy-env' : 'none',
+    };
+  }
+
+  private async syncProjectAgentLoginProjectRoot(projectRoot: string): Promise<void> {
+    const nextState = await this.projectAgentLogin.selectProject(projectRoot.trim() || null);
+    this.projectAgentLoginState = this.createProjectAgentLoginState(nextState);
+    this.sendProjectAgentLoginState();
+    this.sendNavigationState();
+  }
+
+  private getLegacyAgentLoginMissingEnvNames(): string[] {
+    const usernameEnvName = this.chromeAppearanceState.agentLoginUsernameEnv.trim();
+    const passwordEnvName = this.chromeAppearanceState.agentLoginPasswordEnv.trim();
+
+    return [usernameEnvName, passwordEnvName].filter(
+      (envName) => envName.length > 0 && !(process.env[envName]?.trim()),
+    );
+  }
+
+  private getResolvedLegacyAgentLoginCredentials(): { username: string; password: string } | null {
+    const usernameEnvName = this.chromeAppearanceState.agentLoginUsernameEnv.trim();
+    const passwordEnvName = this.chromeAppearanceState.agentLoginPasswordEnv.trim();
+    if (!usernameEnvName || !passwordEnvName) {
+      return null;
+    }
+
+    const username = process.env[usernameEnvName]?.trim() ?? '';
+    const password = process.env[passwordEnvName]?.trim() ?? '';
+    if (!username || !password) {
+      return null;
+    }
+
+    return {
+      username,
+      password,
+    };
+  }
+
+  private getResolvedAgentLoginCredentials(): { username: string; password: string } | null {
+    const localCredentials = this.projectAgentLogin.resolveLocalCredentials();
+    if (localCredentials) {
+      return localCredentials;
+    }
+
+    return this.getResolvedLegacyAgentLoginCredentials();
+  }
+
+  private getAgentLoginCtaState(): AgentLoginCtaState {
+    const defaultState: AgentLoginCtaState = {
+      visible: false,
+      enabled: false,
+      reason: null,
+    };
+    if (!this.pageView) {
+      return defaultState;
+    }
+
+    const configuredOrigin = this.getConfiguredAgentLoginOrigin();
+    if (!configuredOrigin) {
+      return {
+        ...defaultState,
+        reason: 'Set Default URL in Project Style to scope Use Agent Login to your app.',
+      };
+    }
+
+    const currentUrl = this.pageView.webContents.getURL();
+    if (!currentUrl) {
+      return {
+        ...defaultState,
+        reason: `Use Agent Login is available on ${configuredOrigin} login pages only.`,
+      };
+    }
+
+    let currentOrigin: string;
+    try {
+      currentOrigin = new URL(currentUrl).origin;
+    } catch {
+      return {
+        ...defaultState,
+        reason: 'Use Agent Login is only available on pages with a valid URL.',
+      };
+    }
+
+    if (currentOrigin !== configuredOrigin) {
+      return {
+        ...defaultState,
+        reason: `Use Agent Login is available on ${configuredOrigin} login pages only.`,
+      };
+    }
+
+    if (!this.hasVisibleLoginForm) {
+      return {
+        ...defaultState,
+        reason: 'No login form was detected on this page.',
+      };
+    }
+
+    const localCredentials = this.projectAgentLogin.resolveLocalCredentials();
+    if (localCredentials) {
+      return {
+        visible: true,
+        enabled: true,
+        reason: null,
+      };
+    }
+
+    if (this.projectAgentLoginState.lastError) {
+      return {
+        visible: true,
+        enabled: false,
+        reason: this.projectAgentLoginState.lastError,
+      };
+    }
+
+    const usernameEnvName = this.chromeAppearanceState.agentLoginUsernameEnv.trim();
+    const passwordEnvName = this.chromeAppearanceState.agentLoginPasswordEnv.trim();
+    if (!usernameEnvName || !passwordEnvName) {
+      return {
+        visible: true,
+        enabled: false,
+        reason: 'Save an agent login in Project settings to enable this fill action.',
+      };
+    }
+
+    const missingEnvNames = this.getLegacyAgentLoginMissingEnvNames();
+    if (missingEnvNames.length > 0) {
+      return {
+        visible: true,
+        enabled: false,
+        reason: `Legacy env login is configured, but set ${missingEnvNames.join(' and ')} before relaunching Loop Browser.`,
+      };
+    }
+
+    return {
+      visible: true,
+      enabled: true,
+      reason: null,
+    };
+  }
+
+  private async saveProjectAgentLogin(payload: {
+    username: string;
+    password: string;
+  }): Promise<ProjectAgentLoginState> {
+    const nextState = await this.projectAgentLogin.saveLogin(payload);
+    this.projectAgentLoginState = this.createProjectAgentLoginState(nextState);
+    this.sendProjectAgentLoginState();
+    this.sendNavigationState();
+    return this.getProjectAgentLoginState();
+  }
+
+  private async clearProjectAgentLogin(): Promise<ProjectAgentLoginState> {
+    const nextState = await this.projectAgentLogin.clearLogin();
+    this.projectAgentLoginState = this.createProjectAgentLoginState(nextState);
+    this.sendProjectAgentLoginState();
+    this.sendNavigationState();
+    return this.getProjectAgentLoginState();
+  }
+
+  private fillAgentLoginIntoPage(): void {
+    if (!this.pageView || this.pageView.webContents.isDestroyed()) {
+      this.lastError = 'Page view is not ready.';
+      this.sendNavigationState();
+      return;
+    }
+
+    const ctaState = this.getAgentLoginCtaState();
+    if (!ctaState.visible || !ctaState.enabled) {
+      this.lastError = ctaState.reason ?? 'Use Agent Login is not available on this page.';
+      this.sendNavigationState();
+      return;
+    }
+
+    const credentials = this.getResolvedAgentLoginCredentials();
+    if (!credentials) {
+      this.lastError = 'Agent login credentials are not available in the current environment.';
+      this.sendNavigationState();
+      return;
+    }
+
+    this.lastError = null;
+    this.pageView.webContents.send(PAGE_LOGIN_CONTROL_CHANNEL, {
+      action: 'fill',
+      username: credentials.username,
+      password: credentials.password,
+    });
+    this.sendNavigationState();
+  }
+
   private createNavigationState(): NavigationState {
     if (!this.pageView) {
       return createEmptyNavigationState();
@@ -2085,6 +2411,7 @@ export class BrowserShell {
       isLoading: webContents.isLoading(),
       canGoBack: navigationHistory.canGoBack(),
       canGoForward: navigationHistory.canGoForward(),
+      agentLoginCta: this.getAgentLoginCtaState(),
       lastError: this.lastError,
     };
   }
@@ -2186,6 +2513,10 @@ export class BrowserShell {
 
   private sendChromeAppearanceState(): void {
     this.sendToTrustedViews(CHROME_APPEARANCE_STATE_CHANNEL, this.getChromeAppearanceState());
+  }
+
+  private sendProjectAgentLoginState(): void {
+    this.sendToTrustedViews(PROJECT_AGENT_LOGIN_STATE_CHANNEL, this.getProjectAgentLoginState());
   }
 
   private sendPageAgentOverlay(): void {

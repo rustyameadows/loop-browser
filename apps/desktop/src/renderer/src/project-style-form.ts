@@ -1,4 +1,6 @@
 const HEX_COLOR_PATTERN = /^#[0-9A-F]{6}$/;
+const LOCAL_HOST_PATTERN = /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0)(:\d+)?(\/.*)?$/i;
+const URL_SCHEME_PATTERN = /^[a-z][a-z\d+\-.]*:\/\//i;
 
 export const normalizeHexColorDraft = (value: string): string => value.trim().toUpperCase();
 
@@ -46,4 +48,28 @@ export const resolveDraftProjectIconPath = (
     .replace(/[\\/]+/g, separator);
 
   return `${normalizedProjectRoot}${separator}${normalizedRelativePath}`;
+};
+
+export const getDefaultUrlDraftError = (value: string): string | null => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    if (URL_SCHEME_PATTERN.test(trimmed)) {
+      new URL(trimmed);
+      return null;
+    }
+
+    if (LOCAL_HOST_PATTERN.test(trimmed)) {
+      new URL(`http://${trimmed}`);
+      return null;
+    }
+
+    new URL(`https://${trimmed}`);
+    return null;
+  } catch {
+    return 'Default URL must be a valid URL or host.';
+  }
 };

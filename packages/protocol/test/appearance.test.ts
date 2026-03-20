@@ -18,6 +18,9 @@ describe('isChromeAppearanceCommand', () => {
     expect(isChromeAppearanceCommand({ action: 'set', projectIconPath: './icon.png' })).toBe(
       true,
     );
+    expect(isChromeAppearanceCommand({ action: 'set', defaultUrl: 'http://127.0.0.1:3000' })).toBe(
+      true,
+    );
   });
 
   it('rejects malformed commands', () => {

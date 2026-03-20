@@ -39,13 +39,28 @@ describe('project appearance config parsing', () => {
           accentColor: '#112233',
           projectIconPath: './icon.png',
         },
+        startup: {
+          defaultUrl: 'http://127.0.0.1:3000',
+        },
+        agentLogin: {
+          usernameEnv: 'LOOP_AGENT_LOGIN_USERNAME',
+          passwordEnv: 'LOOP_AGENT_LOGIN_PASSWORD',
+        },
       }),
       tempDir,
+      {
+        LOOP_AGENT_LOGIN_USERNAME: 'agent@example.com',
+        LOOP_AGENT_LOGIN_PASSWORD: 'password123',
+      },
     );
 
     expect(state.chromeColor).toBe('#ABCDEF');
     expect(state.accentColor).toBe('#112233');
     expect(state.resolvedProjectIconPath).toBe(iconPath);
+    expect(state.defaultUrl).toBe('http://127.0.0.1:3000/');
+    expect(state.agentLoginUsernameEnv).toBe('LOOP_AGENT_LOGIN_USERNAME');
+    expect(state.agentLoginPasswordEnv).toBe('LOOP_AGENT_LOGIN_PASSWORD');
+    expect(state.agentLoginReady).toBe(true);
   });
 
   it('uses defaults for omitted values', () => {
@@ -104,6 +119,9 @@ describe('project appearance store', () => {
     await store.setAppearance({
       chromeColor: '#112233',
       accentColor: '#445566',
+      defaultUrl: 'http://127.0.0.1:3000',
+      agentLoginUsernameEnv: 'LOOP_AGENT_LOGIN_USERNAME',
+      agentLoginPasswordEnv: 'LOOP_AGENT_LOGIN_PASSWORD',
     });
 
     const writtenConfig = JSON.parse(
@@ -113,10 +131,44 @@ describe('project appearance store', () => {
         chromeColor: string;
         accentColor: string;
       };
+      startup: {
+        defaultUrl: string;
+      };
+      agentLogin: {
+        usernameEnv: string;
+        passwordEnv: string;
+      };
     };
 
     expect(writtenConfig.chrome.chromeColor).toBe('#112233');
     expect(writtenConfig.chrome.accentColor).toBe('#445566');
+    expect(writtenConfig.startup.defaultUrl).toBe('http://127.0.0.1:3000/');
+    expect(writtenConfig.agentLogin.usernameEnv).toBe('LOOP_AGENT_LOGIN_USERNAME');
+    expect(writtenConfig.agentLogin.passwordEnv).toBe('LOOP_AGENT_LOGIN_PASSWORD');
+
+    await store.setAppearance({
+      chromeColor: '#334455',
+    });
+
+    const preservedConfig = JSON.parse(
+      await readFile(path.join(tempDir, '.loop-browser.json'), 'utf8'),
+    ) as {
+      chrome: {
+        chromeColor: string;
+      };
+      startup: {
+        defaultUrl: string;
+      };
+      agentLogin: {
+        usernameEnv: string;
+        passwordEnv: string;
+      };
+    };
+
+    expect(preservedConfig.chrome.chromeColor).toBe('#334455');
+    expect(preservedConfig.startup.defaultUrl).toBe('http://127.0.0.1:3000/');
+    expect(preservedConfig.agentLogin.usernameEnv).toBe('LOOP_AGENT_LOGIN_USERNAME');
+    expect(preservedConfig.agentLogin.passwordEnv).toBe('LOOP_AGENT_LOGIN_PASSWORD');
 
     await writeFile(
       path.join(tempDir, '.loop-browser.json'),
@@ -126,6 +178,9 @@ describe('project appearance store', () => {
           chromeColor: '#AABBCC',
           accentColor: '#334455',
         },
+        startup: {
+          defaultUrl: 'http://127.0.0.1:4000',
+        },
       }),
     );
 
@@ -133,6 +188,7 @@ describe('project appearance store', () => {
 
     expect(store.getState().chromeColor).toBe('#AABBCC');
     expect(store.getState().accentColor).toBe('#334455');
+    expect(store.getState().defaultUrl).toBe('http://127.0.0.1:4000/');
 
     store.dispose();
   });

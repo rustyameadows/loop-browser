@@ -466,6 +466,9 @@ const BASE_TOOL_DEFINITIONS: ToolDefinition[] = [
         chromeColor: { type: 'string' },
         accentColor: { type: 'string' },
         projectIconPath: { type: 'string' },
+        defaultUrl: { type: 'string' },
+        agentLoginUsernameEnv: { type: 'string' },
+        agentLoginPasswordEnv: { type: 'string' },
       },
       additionalProperties: false,
     },
@@ -1799,10 +1802,13 @@ export class ToolServer {
         if (
           typeof args.chromeColor !== 'string' &&
           typeof args.accentColor !== 'string' &&
-          typeof args.projectIconPath !== 'string'
+          typeof args.projectIconPath !== 'string' &&
+          typeof args.defaultUrl !== 'string' &&
+          typeof args.agentLoginUsernameEnv !== 'string' &&
+          typeof args.agentLoginPasswordEnv !== 'string'
         ) {
           throw new Error(
-            'chrome.setAppearance requires at least one of chromeColor, accentColor, or projectIconPath.',
+            'chrome.setAppearance requires at least one of chromeColor, accentColor, projectIconPath, defaultUrl, agentLoginUsernameEnv, or agentLoginPasswordEnv.',
           );
         }
 
@@ -1811,6 +1817,15 @@ export class ToolServer {
             action: 'set',
             chromeColor: typeof args.chromeColor === 'string' ? args.chromeColor : undefined,
             accentColor: typeof args.accentColor === 'string' ? args.accentColor : undefined,
+            defaultUrl: typeof args.defaultUrl === 'string' ? args.defaultUrl : undefined,
+            agentLoginUsernameEnv:
+              typeof args.agentLoginUsernameEnv === 'string'
+                ? args.agentLoginUsernameEnv
+                : undefined,
+            agentLoginPasswordEnv:
+              typeof args.agentLoginPasswordEnv === 'string'
+                ? args.agentLoginPasswordEnv
+                : undefined,
             projectIconPath:
               typeof args.projectIconPath === 'string' ? args.projectIconPath : undefined,
           }, sessionId),

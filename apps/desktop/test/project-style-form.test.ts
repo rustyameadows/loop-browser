@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   getColorPickerValue,
+  getDefaultUrlDraftError,
   getHexColorDraftError,
   normalizeHexColorDraft,
   resolveDraftProjectIconPath,
@@ -49,5 +50,12 @@ describe('project style form helpers', () => {
   it('returns null when there is no project folder or draft icon path', () => {
     expect(resolveDraftProjectIconPath('', './assets/icon.png', '', null)).toBeNull();
     expect(resolveDraftProjectIconPath('/tmp/project', '', '', null)).toBeNull();
+  });
+
+  it('accepts empty and valid default URL drafts and rejects malformed ones', () => {
+    expect(getDefaultUrlDraftError('')).toBeNull();
+    expect(getDefaultUrlDraftError('http://127.0.0.1:3000')).toBeNull();
+    expect(getDefaultUrlDraftError('localhost:3000')).toBeNull();
+    expect(getDefaultUrlDraftError('://bad')).toBe('Default URL must be a valid URL or host.');
   });
 });

@@ -16,6 +16,7 @@ describe('isNavigationCommand', () => {
     expect(isNavigationCommand({ action: 'back' })).toBe(true);
     expect(isNavigationCommand({ action: 'forward' })).toBe(true);
     expect(isNavigationCommand({ action: 'stop' })).toBe(true);
+    expect(isNavigationCommand({ action: 'useAgentLogin' })).toBe(true);
   });
 
   it('rejects malformed commands', () => {
@@ -34,6 +35,11 @@ describe('isNavigationState', () => {
         isLoading: false,
         canGoBack: false,
         canGoForward: false,
+        agentLoginCta: {
+          visible: true,
+          enabled: true,
+          reason: null,
+        },
         lastError: null,
       }),
     ).toBe(true);

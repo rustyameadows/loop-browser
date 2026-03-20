@@ -2,6 +2,10 @@ import type { McpAgentActivityPhase, McpViewCommand, McpViewState } from './mcp'
 import type { MarkdownViewCommand, MarkdownViewState } from './markdown';
 import type { FeedbackCommand, FeedbackState } from './feedback';
 import type { ChromeAppearanceCommand, ChromeAppearanceState } from './appearance';
+import type {
+  ProjectAgentLoginSaveRequest,
+  ProjectAgentLoginState,
+} from './agent-login';
 import type { SessionCommand, SessionViewState } from './session';
 
 export const NAVIGATION_COMMAND_CHANNEL = 'navigation:command';
@@ -13,8 +17,17 @@ export const PICKER_STATE_CHANNEL = 'picker:state';
 export const PAGE_PICKER_CONTROL_CHANNEL = 'page-picker:control';
 export const PAGE_PICKER_EVENT_CHANNEL = 'page-picker:event';
 export const PAGE_AGENT_OVERLAY_CHANNEL = 'page-agent:overlay';
+export const PAGE_LOGIN_CONTROL_CHANNEL = 'page-login:control';
+export const PAGE_LOGIN_EVENT_CHANNEL = 'page-login:event';
 
-export const navigationActions = ['navigate', 'reload', 'stop', 'back', 'forward'] as const;
+export const navigationActions = [
+  'navigate',
+  'reload',
+  'stop',
+  'back',
+  'forward',
+  'useAgentLogin',
+] as const;
 export const pickerActions = ['enable', 'disable', 'toggle', 'clearSelection'] as const;
 
 export type NavigationAction = (typeof navigationActions)[number];
@@ -84,6 +97,17 @@ export type PagePickerEvent =
       type: 'cancelled';
     };
 
+export type PageLoginControl = {
+  action: 'fill';
+  username: string;
+  password: string;
+};
+
+export type PageLoginEvent = {
+  type: 'availability';
+  hasVisibleLoginForm: boolean;
+};
+
 export interface PageAgentOverlayState {
   annotationId: string;
   selection: ElementDescriptor;
@@ -93,12 +117,19 @@ export interface PageAgentOverlayState {
   sourceUrl: string;
 }
 
+export interface AgentLoginCtaState {
+  visible: boolean;
+  enabled: boolean;
+  reason: string | null;
+}
+
 export interface NavigationState {
   url: string;
   title: string;
   isLoading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
+  agentLoginCta: AgentLoginCtaState;
   lastError: string | null;
 }
 
@@ -122,6 +153,12 @@ export interface NavigationBridge {
   getChromeAppearanceState(): Promise<ChromeAppearanceState>;
   subscribeChromeAppearance(listener: (state: ChromeAppearanceState) => void): () => void;
   browseProjectIcon(): Promise<string | null>;
+  getProjectAgentLoginState(): Promise<ProjectAgentLoginState>;
+  subscribeProjectAgentLogin(listener: (state: ProjectAgentLoginState) => void): () => void;
+  saveProjectAgentLogin(
+    request: ProjectAgentLoginSaveRequest,
+  ): Promise<ProjectAgentLoginState>;
+  clearProjectAgentLogin(): Promise<ProjectAgentLoginState>;
   executeFeedback(command: FeedbackCommand): Promise<FeedbackState>;
   getFeedbackState(): Promise<FeedbackState>;
   subscribeFeedback(listener: (state: FeedbackState) => void): () => void;
@@ -134,6 +171,11 @@ export const createEmptyNavigationState = (): NavigationState => ({
   isLoading: false,
   canGoBack: false,
   canGoForward: false,
+  agentLoginCta: {
+    visible: false,
+    enabled: false,
+    reason: null,
+  },
   lastError: null,
 });
 
@@ -253,6 +295,26 @@ export const isPagePickerEvent = (value: unknown): value is PagePickerEvent => {
   return value.type === 'selection' && isElementDescriptor(value.descriptor);
 };
 
+export const isPageLoginControl = (value: unknown): value is PageLoginControl => {
+  if (!isRecord(value) || typeof value.action !== 'string') {
+    return false;
+  }
+
+  return (
+    value.action === 'fill' &&
+    typeof value.username === 'string' &&
+    typeof value.password === 'string'
+  );
+};
+
+export const isPageLoginEvent = (value: unknown): value is PageLoginEvent => {
+  if (!isRecord(value) || typeof value.type !== 'string') {
+    return false;
+  }
+
+  return value.type === 'availability' && typeof value.hasVisibleLoginForm === 'boolean';
+};
+
 export const isPageAgentOverlayState = (value: unknown): value is PageAgentOverlayState => {
   if (!isRecord(value)) {
     return false;
@@ -281,6 +343,10 @@ export const isNavigationState = (value: unknown): value is NavigationState => {
     typeof value.isLoading === 'boolean' &&
     typeof value.canGoBack === 'boolean' &&
     typeof value.canGoForward === 'boolean' &&
+    isRecord(value.agentLoginCta) &&
+    typeof value.agentLoginCta.visible === 'boolean' &&
+    typeof value.agentLoginCta.enabled === 'boolean' &&
+    (typeof value.agentLoginCta.reason === 'string' || value.agentLoginCta.reason === null) &&
     (typeof value.lastError === 'string' || value.lastError === null)
   );
 };

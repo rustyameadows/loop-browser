@@ -22,6 +22,12 @@ export interface ChromeAppearanceState {
   accentColor: string;
   projectIconPath: string;
   resolvedProjectIconPath: string | null;
+  defaultUrl: string;
+  agentLoginUsernameEnv: string;
+  agentLoginPasswordEnv: string;
+  agentLoginUsernameResolved: boolean;
+  agentLoginPasswordResolved: boolean;
+  agentLoginReady: boolean;
   dockIconStatus: ChromeDockIconStatus;
   dockIconSource: ChromeDockIconSource;
   dockIconLastError: string | null;
@@ -37,6 +43,9 @@ export type ChromeAppearanceCommand =
       chromeColor?: string;
       accentColor?: string;
       projectIconPath?: string;
+      defaultUrl?: string;
+      agentLoginUsernameEnv?: string;
+      agentLoginPasswordEnv?: string;
     };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -53,6 +62,12 @@ export const createEmptyChromeAppearanceState = (): ChromeAppearanceState => ({
   accentColor: DEFAULT_ACCENT_COLOR,
   projectIconPath: '',
   resolvedProjectIconPath: null,
+  defaultUrl: '',
+  agentLoginUsernameEnv: '',
+  agentLoginPasswordEnv: '',
+  agentLoginUsernameResolved: false,
+  agentLoginPasswordResolved: false,
+  agentLoginReady: false,
   dockIconStatus: 'idle',
   dockIconSource: 'chromeColor',
   dockIconLastError: null,
@@ -73,6 +88,12 @@ export const isChromeAppearanceState = (value: unknown): value is ChromeAppearan
     typeof value.projectIconPath === 'string' &&
     (typeof value.resolvedProjectIconPath === 'string' ||
       value.resolvedProjectIconPath === null) &&
+    typeof value.defaultUrl === 'string' &&
+    typeof value.agentLoginUsernameEnv === 'string' &&
+    typeof value.agentLoginPasswordEnv === 'string' &&
+    typeof value.agentLoginUsernameResolved === 'boolean' &&
+    typeof value.agentLoginPasswordResolved === 'boolean' &&
+    typeof value.agentLoginReady === 'boolean' &&
     typeof value.dockIconStatus === 'string' &&
     chromeDockIconStatuses.includes(value.dockIconStatus as ChromeDockIconStatus) &&
     typeof value.dockIconSource === 'string' &&
@@ -99,14 +120,27 @@ export const isChromeAppearanceCommand = (value: unknown): value is ChromeAppear
       return (
         !('chromeColor' in value) &&
         !('accentColor' in value) &&
-        !('projectIconPath' in value)
+        !('projectIconPath' in value) &&
+        !('defaultUrl' in value) &&
+        !('agentLoginUsernameEnv' in value) &&
+        !('agentLoginPasswordEnv' in value)
       );
     case 'set':
       return (
         (!('chromeColor' in value) || typeof value.chromeColor === 'string') &&
         (!('accentColor' in value) || typeof value.accentColor === 'string') &&
         (!('projectIconPath' in value) || typeof value.projectIconPath === 'string') &&
-        ('chromeColor' in value || 'accentColor' in value || 'projectIconPath' in value)
+        (!('defaultUrl' in value) || typeof value.defaultUrl === 'string') &&
+        (!('agentLoginUsernameEnv' in value) ||
+          typeof value.agentLoginUsernameEnv === 'string') &&
+        (!('agentLoginPasswordEnv' in value) ||
+          typeof value.agentLoginPasswordEnv === 'string') &&
+        ('chromeColor' in value ||
+          'accentColor' in value ||
+          'projectIconPath' in value ||
+          'defaultUrl' in value ||
+          'agentLoginUsernameEnv' in value ||
+          'agentLoginPasswordEnv' in value)
       );
     default:
       return false;
