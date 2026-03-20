@@ -72,6 +72,7 @@ input {
 
 #root,
 .shell,
+.launcherSurface,
 .markdownSurface,
 .feedbackSurface,
 .mcpSurface,
@@ -831,6 +832,229 @@ a {
 
 .shell__panel--done .shell__diagnostic {
   color: #15764f;
+}
+
+.launcherSurface {
+  background:
+    radial-gradient(circle at top left, rgba(var(--accent-rgb), 0.08), transparent 34%),
+    linear-gradient(180deg, var(--chrome-bg-top), var(--chrome-bg-bottom));
+}
+
+.launcherSurface__panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 14px;
+  height: 100%;
+  padding: 18px;
+}
+
+.launcherSurface__eyebrow {
+  padding-left: 74px;
+  color: var(--chrome-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.launcherSurface__hero,
+.launcherSurface__section,
+.launcherSurface__sessionCard {
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94);
+}
+
+.launcherSurface__hero {
+  display: grid;
+  gap: 12px;
+  padding: 22px 24px;
+}
+
+.launcherSurface__title {
+  max-width: 16ch;
+  color: var(--chrome-text);
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.launcherSurface__subtitle {
+  max-width: 48ch;
+  color: var(--chrome-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.launcherSurface__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.launcherSurface__cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 18px;
+  border: 1px solid var(--chrome-accent-strong-border);
+  border-radius: 999px;
+  background: var(--chrome-accent-strong-bg);
+  color: var(--chrome-accent-strong-fg);
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow:
+    var(--shadow),
+    0 0 0 3px rgba(var(--accent-rgb), 0.08);
+}
+
+.launcherSurface__hint {
+  color: var(--chrome-muted);
+  font-size: 11.5px;
+}
+
+.launcherSurface__section {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  min-height: 0;
+  padding: 16px;
+}
+
+.launcherSurface__sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.launcherSurface__sectionTitle {
+  color: var(--chrome-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.launcherSurface__sectionMeta {
+  color: var(--chrome-muted);
+  font-size: 11.5px;
+}
+
+.launcherSurface__sessionList {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.launcherSurface__sessionCard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+}
+
+.launcherSurface__sessionCard--active {
+  border-color: var(--chrome-accent-soft-border);
+  background: var(--chrome-accent-soft-bg);
+}
+
+.launcherSurface__sessionCardMain {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.launcherSurface__sessionBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  box-shadow: var(--shadow);
+}
+
+.launcherSurface__sessionCopy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.launcherSurface__sessionTitle {
+  overflow: hidden;
+  color: var(--chrome-text);
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.launcherSurface__sessionMeta {
+  overflow: hidden;
+  color: var(--chrome-muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.launcherSurface__sessionActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.launcherSurface__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.launcherSurface__status--green {
+  background: rgba(26, 167, 114, 0.12);
+  color: #15764f;
+}
+
+.launcherSurface__status--yellow {
+  background: rgba(240, 180, 41, 0.16);
+  color: #8d6703;
+}
+
+.launcherSurface__status--red {
+  background: rgba(224, 90, 71, 0.14);
+  color: #b94839;
+}
+
+.launcherSurface__empty {
+  padding: 16px;
+  border: 1px dashed var(--border);
+  border-radius: 16px;
+  background: var(--surface-muted);
+  color: var(--chrome-muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .projectSurface {
@@ -1880,6 +2104,23 @@ a {
 }
 
 @media (max-width: 860px) {
+  .launcherSurface__eyebrow {
+    padding-left: 70px;
+  }
+
+  .launcherSurface__title {
+    font-size: 26px;
+  }
+
+  .launcherSurface__sessionCard {
+    grid-template-columns: 1fr;
+    align-items: flex-start;
+  }
+
+  .launcherSurface__sessionActions {
+    justify-content: flex-start;
+  }
+
   .shell__projectStrip {
     flex-wrap: wrap;
     align-items: flex-start;

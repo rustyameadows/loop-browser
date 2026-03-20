@@ -551,6 +551,7 @@ const run = async () => {
   const env = {
     ...process.env,
     LOOP_BROWSER_CLUSTER_DIR: clusterDir,
+    LOOP_BROWSER_USE_MOCK_KEYCHAIN: '1',
     HOME: homeDir,
     AGENT_BROWSER_TOOL_SERVER_PORT: String(port),
     AGENT_BROWSER_START_URL: 'about:blank',

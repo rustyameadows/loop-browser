@@ -108,8 +108,12 @@ import { fixtureFileUrl, isSafeExternalUrl, normalizeAddress } from './url';
 
 export const PRIMARY_TAB_ID = 'tab-1';
 const AGENT_DONE_PULSE_MS = 1600;
+const LAUNCHER_WINDOW_WIDTH = 560;
+const LAUNCHER_WINDOW_HEIGHT = 520;
+const LAUNCHER_WINDOW_MIN_WIDTH = 420;
+const LAUNCHER_WINDOW_MIN_HEIGHT = 420;
 
-type TrustedSurface = 'chrome' | 'markdown' | 'mcp' | 'feedback' | 'project';
+type TrustedSurface = 'chrome' | 'launcher' | 'markdown' | 'mcp' | 'feedback' | 'project';
 
 type SidePanelKind = 'markdown' | 'mcp' | 'feedback' | 'project';
 
@@ -183,6 +187,7 @@ export class BrowserShell {
   private dockIconStatus: ChromeAppearanceState['dockIconStatus'] = 'idle';
   private dockIconSource: ChromeAppearanceState['dockIconSource'] = 'chromeColor';
   private appliedDockIconKey: string | null = null;
+  private launcherDockVisibility: 'shown' | 'hidden' | null = null;
 
   constructor(private readonly options: BrowserShellOptions = {}) {
     this.role = options.role ?? 'project-session';
@@ -206,6 +211,7 @@ export class BrowserShell {
       ...createEmptySessionViewState(),
       role: this.role,
     };
+    this.syncLauncherDockVisibility();
     this.registerIpcHandlers();
     this.projectAppearanceUnsubscribe = this.projectAppearance.subscribe((state) => {
       this.chromeAppearanceState = {
@@ -219,6 +225,7 @@ export class BrowserShell {
     this.sessionRuntimeUnsubscribe = this.sessionRuntime
       ? this.sessionRuntime.subscribe((state) => {
           this.sessionState = state;
+          this.syncLauncherDockVisibility();
           this.sendSessionState();
         })
       : null;
@@ -230,28 +237,32 @@ export class BrowserShell {
       return;
     }
 
+    const isLauncherWindow = this.role === 'launcher';
     this.window = new BaseWindow({
-      width: 1480,
-      height: 960,
-      minWidth: 980,
-      minHeight: 720,
-      title: 'Loop Browser',
+      width: isLauncherWindow ? LAUNCHER_WINDOW_WIDTH : 1480,
+      height: isLauncherWindow ? LAUNCHER_WINDOW_HEIGHT : 960,
+      minWidth: isLauncherWindow ? LAUNCHER_WINDOW_MIN_WIDTH : 980,
+      minHeight: isLauncherWindow ? LAUNCHER_WINDOW_MIN_HEIGHT : 720,
+      title: isLauncherWindow ? 'Loop Browser Launcher' : 'Loop Browser',
       backgroundColor: this.chromeAppearanceState.chromeColor,
       titleBarStyle: 'hiddenInset',
     });
 
-    this.uiView = this.createTrustedView('chrome');
-    this.pageView = new WebContentsView({
-      webPreferences: {
-        preload: path.join(__dirname, 'page.js'),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-      },
-    });
+    this.uiView = this.createTrustedView(isLauncherWindow ? 'launcher' : 'chrome');
 
     this.window.contentView.addChildView(this.uiView);
-    this.window.contentView.addChildView(this.pageView);
+
+    if (!isLauncherWindow) {
+      this.pageView = new WebContentsView({
+        webPreferences: {
+          preload: path.join(__dirname, 'page.js'),
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+        },
+      });
+      this.window.contentView.addChildView(this.pageView);
+    }
 
     this.attachWindowLifecycle();
     this.attachPageEvents();
@@ -259,7 +270,9 @@ export class BrowserShell {
     this.layoutViews();
     this.applyChromeAppearance();
     void this.syncDockIcon();
-    void this.loadInitialPage();
+    if (!isLauncherWindow) {
+      void this.loadInitialPage();
+    }
   }
 
   dispose(): void {
@@ -310,10 +323,18 @@ export class BrowserShell {
   }
 
   togglePicker(): void {
+    if (!this.pageView) {
+      return;
+    }
+
     void this.executePickerCommand({ action: 'toggle' });
   }
 
   toggleMarkdownView(): void {
+    if (!this.pageView) {
+      return;
+    }
+
     void this.executeMarkdownViewCommand({ action: 'toggle' });
   }
 
@@ -322,6 +343,10 @@ export class BrowserShell {
   }
 
   toggleFeedbackView(): void {
+    if (!this.pageView) {
+      return;
+    }
+
     void this.executeFeedbackCommand({ action: 'toggle' });
   }
 
@@ -822,7 +847,11 @@ export class BrowserShell {
         }
 
         this.sessionState = await this.sessionRuntime.executeCommand(payload);
+        this.syncLauncherDockVisibility();
         this.sendSessionState();
+        if (this.role === 'launcher' && payload.action === 'openProject') {
+          this.closeWindow();
+        }
         return this.getSessionState();
       },
     );
@@ -1113,6 +1142,10 @@ export class BrowserShell {
   }
 
   private async loadInitialPage(): Promise<void> {
+    if (this.role === 'launcher') {
+      return;
+    }
+
     const initialUrl =
       this.options.initialUrl ??
       fixtureFileUrl({
@@ -1125,11 +1158,39 @@ export class BrowserShell {
   }
 
   private layoutViews(): void {
-    if (!this.window || !this.uiView || !this.pageView) {
+    if (!this.window || !this.uiView) {
       return;
     }
 
     const [width, height] = this.window.getContentSize();
+    if (!this.pageView) {
+      this.uiView.setBounds({
+        x: 0,
+        y: 0,
+        width,
+        height,
+      });
+
+      for (const panelView of [
+        this.feedbackPanelView,
+        this.markdownPanelView,
+        this.mcpPanelView,
+        this.projectPanelView,
+      ]) {
+        if (!panelView) {
+          continue;
+        }
+
+        panelView.setBounds({
+          x: width,
+          y: 0,
+          width: 0,
+          height: 0,
+        });
+      }
+      return;
+    }
+
     const contentHeight = Math.max(height - CHROME_HEIGHT, 0);
     const activeSidePanel = this.getActiveSidePanel();
     const activeSidePanelView =
@@ -1721,6 +1782,9 @@ export class BrowserShell {
         projectRoot: result.filePaths[0],
       });
       this.sendSessionState();
+      if (this.role === 'launcher') {
+        this.closeWindow();
+      }
       return this.getChromeAppearanceState();
     }
 
@@ -1771,6 +1835,27 @@ export class BrowserShell {
       dockIconLastError: this.dockIconError,
       lastError: this.composeChromeAppearanceError(state.lastError, this.dockIconError),
     };
+  }
+
+  private syncLauncherDockVisibility(): void {
+    if (this.role !== 'launcher' || process.platform !== 'darwin' || !app.dock) {
+      return;
+    }
+
+    const hasLiveProjectSessions = this.sessionState.sessions.some(
+      (session) => !session.isHome && session.status !== 'closed' && session.status !== 'error',
+    );
+    const nextVisibility = hasLiveProjectSessions ? 'hidden' : 'shown';
+    if (nextVisibility === this.launcherDockVisibility) {
+      return;
+    }
+
+    if (nextVisibility === 'hidden') {
+      app.dock.hide();
+    } else {
+      app.dock.show();
+    }
+    this.launcherDockVisibility = nextVisibility;
   }
 
   private async syncDockIcon(): Promise<void> {

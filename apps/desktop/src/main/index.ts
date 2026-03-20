@@ -22,6 +22,10 @@ import { ToolServer, type ToolServerConnectionInfo } from './tool-server';
 
 app.setName('Loop Browser');
 
+if (process.env.LOOP_BROWSER_USE_MOCK_KEYCHAIN === '1') {
+  app.commandLine.appendSwitch('use-mock-keychain');
+}
+
 const runtimeConfig = resolveRuntimeConfig(process.env);
 const clusterDir =
   process.env[LOOP_BROWSER_CLUSTER_DIR_ENV] || deriveClusterDir(app.getPath('appData'));

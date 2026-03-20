@@ -34,7 +34,9 @@ vi.mock('electron', () => ({
   WebContentsView: class {},
   app: {
     dock: {
+      hide: vi.fn(),
       setIcon: vi.fn(),
+      show: vi.fn(),
     },
     getAppPath: () => '/tmp/app',
     getPath: () => '/tmp/user-data',
@@ -614,6 +616,104 @@ describe('BrowserShell', () => {
     await vi.waitFor(() => {
       expect(app.dock?.setIcon).toHaveBeenCalled();
     });
+  });
+
+  it('hides the launcher dock icon while project sessions are open', () => {
+    const listeners = new Set<(state: {
+      role: 'launcher';
+      sessions: Array<{
+        sessionId: string;
+        projectRoot: string;
+        projectName: string;
+        chromeColor: string;
+        projectIconPath: string;
+        isFocused: boolean;
+        isHome: boolean;
+        dockIconStatus: 'idle' | 'applied' | 'failed';
+        status: 'launching' | 'ready' | 'closing' | 'closed' | 'error';
+      }>;
+      currentSessionId: string | null;
+      lastError: string | null;
+    }) => void>();
+    const sessionRuntime = {
+      getState: () => ({
+        role: 'launcher' as const,
+        sessions: [],
+        currentSessionId: null,
+        lastError: null,
+      }),
+      subscribe: (
+        listener: (state: {
+          role: 'launcher';
+          sessions: Array<{
+            sessionId: string;
+            projectRoot: string;
+            projectName: string;
+            chromeColor: string;
+            projectIconPath: string;
+            isFocused: boolean;
+            isHome: boolean;
+            dockIconStatus: 'idle' | 'applied' | 'failed';
+            status: 'launching' | 'ready' | 'closing' | 'closed' | 'error';
+          }>;
+          currentSessionId: string | null;
+          lastError: string | null;
+        }) => void,
+      ) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      executeCommand: async () => ({
+        role: 'launcher' as const,
+        sessions: [],
+        currentSessionId: null,
+        lastError: null,
+      }),
+    };
+
+    new BrowserShell({
+      projectAppearance: createProjectAppearanceRuntime(),
+      sessionRuntime,
+      role: 'launcher',
+    });
+
+    expect(app.dock?.show).toHaveBeenCalled();
+
+    for (const listener of listeners) {
+      listener({
+        role: 'launcher',
+        sessions: [
+          {
+            sessionId: 'project-1',
+            projectRoot: '/tmp/project-1',
+            projectName: 'Project 1',
+            chromeColor: '#F297E7',
+            projectIconPath: './icon.svg',
+            isFocused: true,
+            isHome: false,
+            dockIconStatus: 'applied',
+            status: 'ready',
+          },
+        ],
+        currentSessionId: 'project-1',
+        lastError: null,
+      });
+    }
+
+    expect(app.dock?.hide).toHaveBeenCalled();
+
+    for (const listener of listeners) {
+      listener({
+        role: 'launcher',
+        sessions: [],
+        currentSessionId: null,
+        lastError: null,
+      });
+    }
+
+    expect(app.dock?.show).toHaveBeenCalledTimes(2);
   });
 
   it('surfaces a dock icon error when Electron creates an empty dock image', async () => {

@@ -55,7 +55,7 @@ const emptySessionState = createEmptySessionViewState();
 const stubTabs = ['Agent Chat', 'Inspector'];
 const AGENT_DONE_PULSE_MS = 1600;
 
-type SurfaceMode = 'chrome' | 'markdown' | 'mcp' | 'feedback' | 'project';
+type SurfaceMode = 'chrome' | 'launcher' | 'markdown' | 'mcp' | 'feedback' | 'project';
 
 type IconName =
   | 'arrowUpRight'
@@ -88,6 +88,10 @@ const getSurfaceMode = (): SurfaceMode => {
 
   if (params.get('surface') === 'project') {
     return 'project';
+  }
+
+  if (params.get('surface') === 'launcher') {
+    return 'launcher';
   }
 
   return 'chrome';
@@ -830,15 +834,13 @@ const useMcpPresence = (
   };
 };
 
-const SessionStrip = ({
-  sessionState,
-}: {
-  sessionState: SessionViewState;
-}): JSX.Element => {
+const useSessionCommands = (): {
+  isOpeningProject: boolean;
+  handleOpenProject(): Promise<void>;
+  handleFocusSession(sessionId: string): Promise<void>;
+  handleCloseSession(event: MouseEvent<HTMLButtonElement>, sessionId: string): Promise<void>;
+} => {
   const [isOpeningProject, setIsOpeningProject] = useState(false);
-  const activeSessionId =
-    sessionState.sessions.find((session) => session.isFocused)?.sessionId ??
-    sessionState.currentSessionId;
 
   const runSessionCommand = async (command: SessionCommand): Promise<void> => {
     await window.agentBrowser.executeSession(command);
@@ -874,6 +876,25 @@ const SessionStrip = ({
       // Session errors are surfaced through session state.
     }
   };
+
+  return {
+    isOpeningProject,
+    handleOpenProject,
+    handleFocusSession,
+    handleCloseSession,
+  };
+};
+
+const SessionStrip = ({
+  sessionState,
+}: {
+  sessionState: SessionViewState;
+}): JSX.Element => {
+  const { isOpeningProject, handleOpenProject, handleFocusSession, handleCloseSession } =
+    useSessionCommands();
+  const activeSessionId =
+    sessionState.sessions.find((session) => session.isFocused)?.sessionId ??
+    sessionState.currentSessionId;
 
   return (
     <section aria-label="Open projects" className="shell__projectStrip">
@@ -957,6 +978,126 @@ const SessionStrip = ({
         </button>
       </div>
     </section>
+  );
+};
+
+const LauncherSurface = ({
+  sessionState,
+}: {
+  sessionState: SessionViewState;
+}): JSX.Element => {
+  const { isOpeningProject, handleOpenProject, handleFocusSession, handleCloseSession } =
+    useSessionCommands();
+  const activeSessionId =
+    sessionState.sessions.find((session) => session.isFocused)?.sessionId ??
+    sessionState.currentSessionId;
+
+  return (
+    <main className="launcherSurface">
+      <section className="launcherSurface__panel">
+        <div className="launcherSurface__eyebrow">Loop Browser Launcher</div>
+
+        <section className="launcherSurface__hero">
+          <div className="launcherSurface__title">Open a project and jump in.</div>
+          <div className="launcherSurface__subtitle">
+            Each project opens in its own Loop Browser session with its own config, profile, and
+            Dock icon. Use the launcher to start or revisit project windows.
+          </div>
+          <div className="launcherSurface__actions">
+            <button
+              className="launcherSurface__cta"
+              disabled={isOpeningProject}
+              onClick={() => void handleOpenProject()}
+              type="button"
+            >
+              {isOpeningProject ? 'Opening Project...' : 'Open Project'}
+            </button>
+            <div className="launcherSurface__hint">Shortcut: Cmd/Ctrl + Shift + O</div>
+          </div>
+        </section>
+
+        <section className="launcherSurface__section">
+          <div className="launcherSurface__sectionHeader">
+            <div className="launcherSurface__sectionTitle">Open Sessions</div>
+            <div className="launcherSurface__sectionMeta">
+              {sessionState.sessions.length} active
+            </div>
+          </div>
+
+          {sessionState.lastError ? (
+            <div className="projectSurface__error">{sessionState.lastError}</div>
+          ) : null}
+
+          {sessionState.sessions.length > 0 ? (
+            <div className="launcherSurface__sessionList">
+              {sessionState.sessions.map((session) => {
+                const badgeForeground = getReadableForeground(session.chromeColor);
+                const isActive = activeSessionId === session.sessionId;
+
+                return (
+                  <div
+                    className={`launcherSurface__sessionCard${
+                      isActive ? ' launcherSurface__sessionCard--active' : ''
+                    }`}
+                    key={session.sessionId}
+                  >
+                    <button
+                      className="launcherSurface__sessionCardMain"
+                      onClick={() => void handleFocusSession(session.sessionId)}
+                      type="button"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="launcherSurface__sessionBadge"
+                        style={{
+                          backgroundColor: session.chromeColor,
+                          color: badgeForeground,
+                        }}
+                      >
+                        {getSessionBadgeLabel(session)}
+                      </span>
+                      <span className="launcherSurface__sessionCopy">
+                        <span className="launcherSurface__sessionTitle">{session.projectName}</span>
+                        <span className="launcherSurface__sessionMeta">
+                          {session.projectRoot}
+                        </span>
+                      </span>
+                    </button>
+                    <div className="launcherSurface__sessionActions">
+                      <span
+                        className={`launcherSurface__status launcherSurface__status--${
+                          session.status === 'error'
+                            ? 'red'
+                            : session.status === 'launching' || session.status === 'closing'
+                              ? 'yellow'
+                              : session.dockIconStatus === 'failed'
+                                ? 'red'
+                                : 'green'
+                        }`}
+                      >
+                        {getSessionChipMeta(session)}
+                      </span>
+                      <button
+                        aria-label={`Close ${session.projectName}`}
+                        className="shell__pillButton shell__pillButton--muted"
+                        onClick={(event) => void handleCloseSession(event, session.sessionId)}
+                        type="button"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="launcherSurface__empty">
+              No project sessions are open yet. Open a folder to launch your first project window.
+            </div>
+          )}
+        </section>
+      </section>
+    </main>
   );
 };
 
@@ -2478,6 +2619,10 @@ export const App = (): JSX.Element => {
         sessionState={sessionState}
       />
     );
+  }
+
+  if (surfaceMode === 'launcher') {
+    return <LauncherSurface sessionState={sessionState} />;
   }
 
   return <ChromeSurface chromeAppearanceState={chromeAppearanceState} sessionState={sessionState} />;

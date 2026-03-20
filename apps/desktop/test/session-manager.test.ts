@@ -167,11 +167,12 @@ describe('SessionDirectoryController', () => {
 
     expect(spawnMock).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(`http://127.0.0.1/${sessionId}`);
-    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+    const firstFetchCall = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(firstFetchCall[0]).toBe(`http://127.0.0.1/${sessionId}`);
+    expect(firstFetchCall[1]).toMatchObject({
       method: 'POST',
     });
-    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const requestInit = firstFetchCall[1];
     expect(String(requestInit.body)).toContain('internal/sessionFocus');
     expect(controller.getState().currentSessionId).toBe(sessionId);
 
