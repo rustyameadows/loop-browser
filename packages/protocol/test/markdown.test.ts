@@ -13,6 +13,9 @@ describe('markdown view protocol guards', () => {
     expect(
       isMarkdownViewCommand({ action: 'setPresentation', mode: 'sidebar', side: 'left' }),
     ).toBe(true);
+    expect(
+      isMarkdownViewCommand({ action: 'moveFloatingPill', deltaX: 8, deltaY: 4 }),
+    ).toBe(true);
   });
 
   it('accepts a valid markdown state', () => {
@@ -35,6 +38,9 @@ describe('markdown view protocol guards', () => {
     expect(isMarkdownViewCommand({ action: 'refresh', force: 'yes' })).toBe(false);
     expect(
       isMarkdownViewCommand({ action: 'setPresentation', mode: 'sidebar', side: 'bottom' }),
+    ).toBe(false);
+    expect(
+      isMarkdownViewCommand({ action: 'moveFloatingPill', deltaX: '8', deltaY: 4 }),
     ).toBe(false);
     expect(
       isMarkdownViewState({

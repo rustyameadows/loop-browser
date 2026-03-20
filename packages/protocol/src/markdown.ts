@@ -15,6 +15,7 @@ export const markdownViewActions = [
   'refresh',
   'toggle',
   'setPresentation',
+  'moveFloatingPill',
 ] as const;
 export const markdownViewStatuses = ['idle', 'loading', 'ready', 'error'] as const;
 
@@ -39,6 +40,11 @@ export type MarkdownViewCommand =
   | {
       action: 'refresh';
       force?: boolean;
+    }
+  | {
+      action: 'moveFloatingPill';
+      deltaX: number;
+      deltaY: number;
     };
 
 export interface MarkdownViewState {
@@ -81,6 +87,10 @@ export const isMarkdownViewCommand = (value: unknown): value is MarkdownViewComm
     return !('force' in value) || typeof value.force === 'boolean';
   }
 
+  if (value.action === 'moveFloatingPill') {
+    return typeof value.deltaX === 'number' && typeof value.deltaY === 'number';
+  }
+
   if (value.action === 'setPresentation') {
     return (
       isPanelPresentationMode(value.mode) &&
@@ -88,7 +98,11 @@ export const isMarkdownViewCommand = (value: unknown): value is MarkdownViewComm
     );
   }
 
-  return !('force' in value) || value.force === undefined;
+  return (
+    (!('force' in value) || value.force === undefined) &&
+    !('deltaX' in value) &&
+    !('deltaY' in value)
+  );
 };
 
 export const isMarkdownViewState = (value: unknown): value is MarkdownViewState => {

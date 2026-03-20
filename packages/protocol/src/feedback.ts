@@ -81,6 +81,11 @@ export type FeedbackCommand =
       side?: PanelSidebarSide;
     }
   | {
+      action: 'moveFloatingPill';
+      deltaX: number;
+      deltaY: number;
+    }
+  | {
       action: 'startDraftFromSelection';
       selection: ElementDescriptor;
       intent?: PickerIntent;
@@ -243,6 +248,8 @@ export const isFeedbackCommand = (value: unknown): value is FeedbackCommand => {
         isPanelPresentationMode(value.mode) &&
         (!('side' in value) || value.side === undefined || isPanelSidebarSide(value.side))
       );
+    case 'moveFloatingPill':
+      return typeof value.deltaX === 'number' && typeof value.deltaY === 'number';
     case 'startDraftFromSelection':
       return (
         isElementDescriptor(value.selection) &&

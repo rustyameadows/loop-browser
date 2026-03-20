@@ -13,6 +13,9 @@ describe('mcp view protocol guards', () => {
     expect(
       isMcpViewCommand({ action: 'setPresentation', mode: 'floating-pill' }),
     ).toBe(true);
+    expect(
+      isMcpViewCommand({ action: 'moveFloatingPill', deltaX: -10, deltaY: 6 }),
+    ).toBe(true);
   });
 
   it('accepts a valid MCP state', () => {
@@ -74,6 +77,9 @@ describe('mcp view protocol guards', () => {
     expect(isMcpViewCommand({ action: 'restart' })).toBe(false);
     expect(
       isMcpViewCommand({ action: 'setPresentation', mode: 'sidebar', side: 'bottom' }),
+    ).toBe(false);
+    expect(
+      isMcpViewCommand({ action: 'moveFloatingPill', deltaX: 0, deltaY: '6' }),
     ).toBe(false);
     expect(
       isMcpViewState({

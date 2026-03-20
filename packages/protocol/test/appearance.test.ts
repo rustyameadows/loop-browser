@@ -14,6 +14,9 @@ describe('isChromeAppearanceCommand', () => {
     expect(
       isChromeAppearanceCommand({ action: 'setPresentation', mode: 'sidebar', side: 'left' }),
     ).toBe(true);
+    expect(
+      isChromeAppearanceCommand({ action: 'moveFloatingPill', deltaX: 12, deltaY: -8 }),
+    ).toBe(true);
   });
 
   it('accepts partial set commands', () => {
@@ -32,6 +35,9 @@ describe('isChromeAppearanceCommand', () => {
     expect(isChromeAppearanceCommand({ action: 'toggle' })).toBe(false);
     expect(
       isChromeAppearanceCommand({ action: 'setPresentation', mode: 'sidebar', side: 'bottom' }),
+    ).toBe(false);
+    expect(
+      isChromeAppearanceCommand({ action: 'moveFloatingPill', deltaX: '12', deltaY: 8 }),
     ).toBe(false);
   });
 });

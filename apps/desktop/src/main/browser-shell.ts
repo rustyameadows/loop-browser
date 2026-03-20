@@ -180,6 +180,11 @@ type PageMarkupSnapshot = {
   url: string;
 };
 
+type FloatingPillPosition = {
+  x: number;
+  y: number;
+};
+
 export interface BrowserScreenshotCapture {
   target: ScreenshotTarget;
   format: ScreenshotFormat;
@@ -229,6 +234,8 @@ export class BrowserShell {
   private popoutWindow: BaseWindow | null = null;
   private popoutSurface: PanelSurfaceId | null = null;
   private suppressNextPopoutCloseForSurface: PanelSurfaceId | null = null;
+  private readonly floatingPillPositions: Partial<Record<PanelSurfaceId, FloatingPillPosition>> =
+    {};
   private lastError: string | null = null;
   private hasVisibleLoginForm = false;
   private pickerState: PickerState = createEmptyPickerState();
@@ -826,6 +833,93 @@ export class BrowserShell {
     }
   }
 
+  private getFloatingPillSize(
+    windowWidth: number,
+    contentHeight: number,
+  ): { width: number; height: number } {
+    const availableWidth = Math.max(windowWidth - FLOATING_PILL_MARGIN * 2, 0);
+    const availableHeight = Math.max(contentHeight - FLOATING_PILL_MARGIN * 2, 0);
+
+    return {
+      width: Math.max(
+        Math.min(FLOATING_PILL_MAX_WIDTH, availableWidth),
+        Math.min(FLOATING_PILL_MIN_WIDTH, availableWidth),
+      ),
+      height: Math.min(FLOATING_PILL_MAX_HEIGHT, availableHeight),
+    };
+  }
+
+  private clampFloatingPillPosition(
+    windowWidth: number,
+    contentHeight: number,
+    pillWidth: number,
+    pillHeight: number,
+    position: FloatingPillPosition,
+  ): FloatingPillPosition {
+    const minX = FLOATING_PILL_MARGIN;
+    const maxX = Math.max(windowWidth - pillWidth - FLOATING_PILL_MARGIN, FLOATING_PILL_MARGIN);
+    const minY = CHROME_HEIGHT + FLOATING_PILL_MARGIN;
+    const maxY = Math.max(
+      CHROME_HEIGHT + contentHeight - pillHeight - FLOATING_PILL_MARGIN,
+      CHROME_HEIGHT + FLOATING_PILL_MARGIN,
+    );
+
+    return {
+      x: Math.min(Math.max(position.x, minX), maxX),
+      y: Math.min(Math.max(position.y, minY), maxY),
+    };
+  }
+
+  private getFloatingPillBounds(
+    surface: PanelSurfaceId,
+    windowWidth: number,
+    contentHeight: number,
+  ): { x: number; y: number; width: number; height: number } {
+    const { width, height } = this.getFloatingPillSize(windowWidth, contentHeight);
+    const defaultPosition = {
+      x: Math.max(Math.round((windowWidth - width) / 2), FLOATING_PILL_MARGIN),
+      y:
+        CHROME_HEIGHT +
+        Math.max(contentHeight - height - FLOATING_PILL_MARGIN, FLOATING_PILL_MARGIN),
+    };
+    const nextPosition = this.clampFloatingPillPosition(
+      windowWidth,
+      contentHeight,
+      width,
+      height,
+      this.floatingPillPositions[surface] ?? defaultPosition,
+    );
+
+    this.floatingPillPositions[surface] = nextPosition;
+    return {
+      ...nextPosition,
+      width,
+      height,
+    };
+  }
+
+  private moveFloatingPill(surface: PanelSurfaceId, deltaX: number, deltaY: number): void {
+    if (!this.window || !this.isPanelOpen(surface) || this.getPanelPresentation(surface).mode !== 'floating-pill') {
+      return;
+    }
+
+    const [windowWidth, windowHeight] = this.window.getContentSize();
+    const contentHeight = Math.max(windowHeight - CHROME_HEIGHT, 0);
+    const currentBounds = this.getFloatingPillBounds(surface, windowWidth, contentHeight);
+
+    this.floatingPillPositions[surface] = this.clampFloatingPillPosition(
+      windowWidth,
+      contentHeight,
+      currentBounds.width,
+      currentBounds.height,
+      {
+        x: currentBounds.x + deltaX,
+        y: currentBounds.y + deltaY,
+      },
+    );
+    this.layoutViews();
+  }
+
   private createPopoutWindow(surface: PanelSurfaceId): void {
     this.ensureWindow();
 
@@ -868,6 +962,13 @@ export class BrowserShell {
 
     this.popoutWindow = popoutWindow;
     this.popoutSurface = surface;
+    for (const delayMs of [0, 50, 150, 300]) {
+      setTimeout(() => {
+        if (this.popoutWindow === popoutWindow && this.popoutSurface === surface) {
+          this.layoutPopoutWindow();
+        }
+      }, delayMs);
+    }
   }
 
   private closePopoutWindow(preserveSurfaceOpen: boolean): void {
@@ -1099,6 +1200,9 @@ export class BrowserShell {
         return this.markdownViewState.isOpen
           ? this.closeMarkdownPanel()
           : this.openMarkdownPanel();
+      case 'moveFloatingPill':
+        this.moveFloatingPill('markdown', command.deltaX, command.deltaY);
+        return this.getMarkdownViewState();
       case 'setPresentation':
         await this.updatePanelPresentation('markdown', command.mode, command.side);
         this.sendMarkdownViewState();
@@ -1122,6 +1226,9 @@ export class BrowserShell {
         return this.closeMcpPanel();
       case 'toggle':
         return this.mcpViewState.isOpen ? this.closeMcpPanel() : this.openMcpPanel();
+      case 'moveFloatingPill':
+        this.moveFloatingPill('mcp', command.deltaX, command.deltaY);
+        return this.getMcpViewState();
       case 'setPresentation':
         await this.updatePanelPresentation('mcp', command.mode, command.side);
         this.sendMcpViewState();
@@ -1153,6 +1260,9 @@ export class BrowserShell {
         return this.closeStylePanel();
       case 'toggle':
         return this.styleViewState.isOpen ? this.closeStylePanel() : this.openStylePanel();
+      case 'moveFloatingPill':
+        this.moveFloatingPill('style', command.deltaX, command.deltaY);
+        return this.getStyleViewState();
       case 'setPresentation':
         await this.updatePanelPresentation('style', command.mode, command.side);
         this.sendStyleViewState();
@@ -1182,6 +1292,9 @@ export class BrowserShell {
         return this.openProjectPanel();
       case 'close':
         return this.closeProjectPanel();
+      case 'moveFloatingPill':
+        this.moveFloatingPill('project', command.deltaX, command.deltaY);
+        return this.getChromeAppearanceState();
       case 'setPresentation':
         await this.updatePanelPresentation('project', command.mode, command.side);
         this.sendChromeAppearanceState();
@@ -1239,6 +1352,9 @@ export class BrowserShell {
         return this.closeFeedbackPanel();
       case 'toggle':
         return this.feedbackState.isOpen ? this.closeFeedbackPanel() : this.openFeedbackPanel();
+      case 'moveFloatingPill':
+        this.moveFloatingPill('feedback', command.deltaX, command.deltaY);
+        return this.getFeedbackState();
       case 'setPresentation':
         await this.updatePanelPresentation('feedback', command.mode, command.side);
         this.sendFeedbackState();
@@ -1822,6 +1938,8 @@ export class BrowserShell {
       this.sendMcpViewState();
       this.sendStyleViewState();
       this.sendChromeAppearanceState();
+      this.layoutViews();
+      this.layoutPopoutWindow();
     });
 
     this.loadTrustedSurface(view, surface);
@@ -1958,31 +2076,20 @@ export class BrowserShell {
       return;
     }
 
-    if (activeView && activePresentation?.mode === 'floating-pill') {
+    if (activeSurface && activeView && activePresentation?.mode === 'floating-pill') {
       this.pageView.setBounds({
         x: 0,
         y: CHROME_HEIGHT,
         width,
         height: contentHeight,
       });
-
-      const availableWidth = Math.max(width - FLOATING_PILL_MARGIN * 2, 0);
-      const availableHeight = Math.max(contentHeight - FLOATING_PILL_MARGIN * 2, 0);
-      const panelWidth = Math.max(
-        Math.min(FLOATING_PILL_MAX_WIDTH, availableWidth),
-        Math.min(FLOATING_PILL_MIN_WIDTH, availableWidth),
-      );
-      const panelHeight = Math.min(FLOATING_PILL_MAX_HEIGHT, availableHeight);
-      const panelX = Math.max(Math.round((width - panelWidth) / 2), FLOATING_PILL_MARGIN);
-      const panelY =
-        CHROME_HEIGHT +
-        Math.max(contentHeight - panelHeight - FLOATING_PILL_MARGIN, FLOATING_PILL_MARGIN);
+      const panelBounds = this.getFloatingPillBounds(activeSurface, width, contentHeight);
 
       activeView.setBounds({
-        x: panelX,
-        y: panelY,
-        width: panelWidth,
-        height: panelHeight,
+        x: panelBounds.x,
+        y: panelBounds.y,
+        width: panelBounds.width,
+        height: panelBounds.height,
       });
       return;
     }

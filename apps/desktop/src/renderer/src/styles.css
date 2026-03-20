@@ -500,6 +500,45 @@ a {
   gap: 8px;
   min-width: 0;
   flex: 1 1 auto;
+  -webkit-app-region: no-drag;
+}
+
+.surfaceHeader {
+  position: relative;
+}
+
+.surfaceHeader--windowDrag {
+  -webkit-app-region: drag;
+}
+
+.surfaceHeader--floatingPill {
+  cursor: grab;
+}
+
+.surfaceHeader--floatingPill:active {
+  cursor: grabbing;
+}
+
+.surfaceHeader > * {
+  position: relative;
+  z-index: 1;
+}
+
+.surfaceWindowDragStrip {
+  position: absolute;
+  left: -18px;
+  right: -18px;
+  top: -18px;
+  bottom: 0;
+  z-index: 0;
+}
+
+.surfaceWindowDragStrip--popout {
+  -webkit-app-region: drag;
+}
+
+.surfaceWindowDragStrip--floatingPill {
+  cursor: grab;
 }
 
 .surfacePresentationControl {
@@ -508,6 +547,7 @@ a {
   gap: 8px;
   min-width: 0;
   margin-left: auto;
+  -webkit-app-region: no-drag;
 }
 
 .surfacePresentationControl__label {
@@ -517,6 +557,7 @@ a {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   white-space: nowrap;
+  -webkit-app-region: no-drag;
 }
 
 .surfacePresentationControl__select {

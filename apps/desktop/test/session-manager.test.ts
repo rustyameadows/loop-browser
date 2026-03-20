@@ -31,6 +31,7 @@ import {
 import type { BrowserShell } from '../src/main/browser-shell';
 
 const originalFetch = globalThis.fetch;
+const originalProcessKill = process.kill.bind(process);
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -52,6 +53,7 @@ const writeSessionRecord = async (
     projectName: string;
     isFocused?: boolean;
     chromeColor?: string;
+    pid?: number;
   },
 ): Promise<void> => {
   const sessionsDir = path.join(clusterDir, 'sessions');
@@ -78,7 +80,7 @@ const writeSessionRecord = async (
           token: `${options.sessionId}-token`,
         },
         updatedAt: '2026-03-19T19:00:00.000Z',
-        pid: 12345,
+        pid: options.pid ?? process.pid,
       },
       null,
       2,
@@ -155,6 +157,40 @@ describe('SessionDirectoryController', () => {
     await controller.dispose();
   });
 
+  it('prunes stale crashed sessions during refresh', async () => {
+    const clusterDir = await mkdtemp(path.join(os.tmpdir(), 'agent-browser-session-cluster-'));
+    tempDirs.push(clusterDir);
+
+    await writeSessionRecord(clusterDir, {
+      sessionId: 'stale-11111111',
+      projectRoot: '/tmp/stale',
+      projectName: 'stale',
+      pid: 424242,
+    });
+
+    vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: number | NodeJS.Signals) => {
+      if (pid === 424242 && signal === 0) {
+        const error = new Error('No such process') as NodeJS.ErrnoException;
+        error.code = 'ESRCH';
+        throw error;
+      }
+
+      return originalProcessKill(pid, signal);
+    }) as typeof process.kill);
+
+    const controller = new SessionDirectoryController({
+      role: 'launcher',
+      clusterDir,
+      currentSessionId: null,
+    });
+
+    await controller.start();
+    expect(controller.listSessions()).toEqual([]);
+    await expect(readFile(path.join(clusterDir, 'sessions', 'stale-11111111.json'), 'utf8')).rejects.toThrow();
+
+    await controller.dispose();
+  });
+
   it('focuses an existing session instead of spawning a duplicate project session', async () => {
     const clusterDir = await mkdtemp(path.join(os.tmpdir(), 'agent-browser-session-cluster-'));
     tempDirs.push(clusterDir);
@@ -215,6 +251,65 @@ describe('SessionDirectoryController', () => {
     expect(String(requestInit.body)).toContain('internal/sessionFocus');
     expect(controller.getState().currentSessionId).toBe(sessionId);
     expect(controller.getCurrentSession()?.isFocused).toBe(true);
+
+    await controller.dispose();
+  });
+
+  it('spawns a fresh project session when the existing launcher record is stale', async () => {
+    const clusterDir = await mkdtemp(path.join(os.tmpdir(), 'agent-browser-session-cluster-'));
+    tempDirs.push(clusterDir);
+
+    const projectRoot = '/tmp/client-b';
+    const sessionId = deriveProjectSessionSlug(projectRoot);
+    await writeSessionRecord(clusterDir, {
+      sessionId,
+      projectRoot,
+      projectName: 'client-b',
+      pid: 515151,
+    });
+
+    vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: number | NodeJS.Signals) => {
+      if (pid === 515151 && signal === 0) {
+        const error = new Error('No such process') as NodeJS.ErrnoException;
+        error.code = 'ESRCH';
+        throw error;
+      }
+
+      return originalProcessKill(pid, signal);
+    }) as typeof process.kill);
+
+    const unrefMock = vi.fn();
+    const removeAllListenersMock = vi.fn();
+    spawnMock.mockImplementation(() => {
+      void writeSessionRecord(clusterDir, {
+        sessionId,
+        projectRoot,
+        projectName: 'client-b',
+        isFocused: false,
+      });
+
+      return {
+        unref: unrefMock,
+        removeAllListeners: removeAllListenersMock,
+      };
+    });
+
+    const controller = new SessionDirectoryController({
+      role: 'launcher',
+      clusterDir,
+      currentSessionId: null,
+    });
+
+    await controller.start();
+    await controller.executeCommand({
+      action: 'openProject',
+      projectRoot,
+    });
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(unrefMock).toHaveBeenCalledTimes(1);
+    expect(controller.getState().currentSessionId).toBe(sessionId);
+    expect(controller.getSessionRecord(sessionId)?.summary.projectRoot).toBe(projectRoot);
 
     await controller.dispose();
   });

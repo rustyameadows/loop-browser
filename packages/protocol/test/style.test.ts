@@ -48,6 +48,9 @@ describe('style view protocol guards', () => {
       isStyleViewCommand({ action: 'setPresentation', mode: 'popout' }),
     ).toBe(true);
     expect(
+      isStyleViewCommand({ action: 'moveFloatingPill', deltaX: 14, deltaY: -4 }),
+    ).toBe(true);
+    expect(
       isStyleViewState({
         ...createEmptyStyleViewState(),
         isOpen: true,
@@ -114,6 +117,9 @@ describe('style view protocol guards', () => {
     expect(isStyleViewCommand({ action: 'setOverrideDeclaration', property: 'color' })).toBe(false);
     expect(
       isStyleViewCommand({ action: 'setPresentation', mode: 'sidebar', side: 'bottom' }),
+    ).toBe(false);
+    expect(
+      isStyleViewCommand({ action: 'moveFloatingPill', deltaX: 14, deltaY: '4' }),
     ).toBe(false);
     expect(
       isStyleViewState({

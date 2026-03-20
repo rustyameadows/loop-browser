@@ -60,6 +60,9 @@ describe('feedback protocol guards', () => {
       isFeedbackCommand({ action: 'setPresentation', mode: 'sidebar', side: 'right' }),
     ).toBe(true);
     expect(
+      isFeedbackCommand({ action: 'moveFloatingPill', deltaX: 6, deltaY: 12 }),
+    ).toBe(true);
+    expect(
       isFeedbackState({
         ...createEmptyFeedbackState(),
         isOpen: true,
@@ -90,6 +93,9 @@ describe('feedback protocol guards', () => {
     ).toBe(false);
     expect(
       isFeedbackCommand({ action: 'setPresentation', mode: 'sidebar', side: 'bottom' }),
+    ).toBe(false);
+    expect(
+      isFeedbackCommand({ action: 'moveFloatingPill', deltaX: '6', deltaY: 12 }),
     ).toBe(false);
     expect(
       isFeedbackState({

@@ -25,6 +25,7 @@ export const chromeAppearanceActions = [
   'reset',
   'selectProject',
   'setPresentation',
+  'moveFloatingPill',
 ] as const;
 
 export type ChromeAppearanceAction = (typeof chromeAppearanceActions)[number];
@@ -55,6 +56,11 @@ export interface ChromeAppearanceState {
 export type ChromeAppearanceCommand =
   | {
       action: 'open' | 'close' | 'reset' | 'selectProject';
+    }
+  | {
+      action: 'moveFloatingPill';
+      deltaX: number;
+      deltaY: number;
     }
   | {
       action: 'setPresentation';
@@ -149,9 +155,13 @@ export const isChromeAppearanceCommand = (value: unknown): value is ChromeAppear
         !('defaultUrl' in value) &&
         !('agentLoginUsernameEnv' in value) &&
         !('agentLoginPasswordEnv' in value) &&
+        !('deltaX' in value) &&
+        !('deltaY' in value) &&
         !('mode' in value) &&
         !('side' in value)
       );
+    case 'moveFloatingPill':
+      return typeof value.deltaX === 'number' && typeof value.deltaY === 'number';
     case 'setPresentation':
       return (
         isPanelPresentationMode(value.mode) &&
@@ -167,6 +177,8 @@ export const isChromeAppearanceCommand = (value: unknown): value is ChromeAppear
           typeof value.agentLoginUsernameEnv === 'string') &&
         (!('agentLoginPasswordEnv' in value) ||
           typeof value.agentLoginPasswordEnv === 'string') &&
+        !('deltaX' in value) &&
+        !('deltaY' in value) &&
         !('mode' in value) &&
         !('side' in value) &&
         ('chromeColor' in value ||

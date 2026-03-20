@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type JSX, type MouseEvent, type SVGProps } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type JSX, type MouseEvent as ReactMouseEvent, type SVGProps } from 'react';
 import {
   DEFAULT_CHROME_COLOR,
   createEmptyChromeAppearanceState,
@@ -736,6 +736,104 @@ const SurfacePresentationControl = ({
   </label>
 );
 
+const SurfaceWindowDragStrip = ({
+  presentation,
+}: {
+  presentation: PanelPresentationPreference;
+}): JSX.Element | null =>
+  presentation.mode === 'popout' || presentation.mode === 'floating-pill' ? (
+    <div
+      aria-hidden="true"
+      className={`surfaceWindowDragStrip${
+        presentation.mode === 'popout'
+          ? ' surfaceWindowDragStrip--popout'
+          : ' surfaceWindowDragStrip--floatingPill'
+      }`}
+    />
+  ) : null;
+
+const getSurfaceHeaderClassName = (
+  baseClassName: string,
+  presentation: PanelPresentationPreference,
+): string =>
+  `${baseClassName} surfaceHeader${
+    presentation.mode === 'popout' ? ' surfaceHeader--windowDrag' : ''
+  }${presentation.mode === 'floating-pill' ? ' surfaceHeader--floatingPill' : ''}`;
+
+const useFloatingPillDrag = (
+  presentation: PanelPresentationPreference,
+  onMove: (deltaX: number, deltaY: number) => void,
+): {
+  onMouseDown?: (event: ReactMouseEvent<HTMLElement>) => void;
+} => {
+  const dragStateRef = useRef<{ x: number; y: number } | null>(null);
+  const moveHandlerRef = useRef<((event: globalThis.MouseEvent) => void) | null>(null);
+  const upHandlerRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (moveHandlerRef.current) {
+        window.removeEventListener('mousemove', moveHandlerRef.current);
+      }
+      if (upHandlerRef.current) {
+        window.removeEventListener('mouseup', upHandlerRef.current);
+      }
+    };
+  }, []);
+
+  const onMouseDown =
+    presentation.mode === 'floating-pill'
+      ? (event: ReactMouseEvent<HTMLElement>) => {
+          const target = event.target as HTMLElement | null;
+          if (target?.closest('button, select, input, textarea, a, label')) {
+            return;
+          }
+
+          event.preventDefault();
+          dragStateRef.current = {
+            x: event.clientX,
+            y: event.clientY,
+          };
+
+          const handleMouseMove = (moveEvent: globalThis.MouseEvent): void => {
+            if (!dragStateRef.current) {
+              return;
+            }
+
+            const deltaX = moveEvent.clientX - dragStateRef.current.x;
+            const deltaY = moveEvent.clientY - dragStateRef.current.y;
+            dragStateRef.current = {
+              x: moveEvent.clientX,
+              y: moveEvent.clientY,
+            };
+
+            if (deltaX !== 0 || deltaY !== 0) {
+              onMove(deltaX, deltaY);
+            }
+          };
+
+          const handleMouseUp = (): void => {
+            dragStateRef.current = null;
+            if (moveHandlerRef.current) {
+              window.removeEventListener('mousemove', moveHandlerRef.current);
+            }
+            if (upHandlerRef.current) {
+              window.removeEventListener('mouseup', upHandlerRef.current);
+            }
+            moveHandlerRef.current = null;
+            upHandlerRef.current = null;
+          };
+
+          moveHandlerRef.current = handleMouseMove;
+          upHandlerRef.current = handleMouseUp;
+          window.addEventListener('mousemove', handleMouseMove);
+          window.addEventListener('mouseup', handleMouseUp, { once: true });
+        }
+      : undefined;
+
+  return { onMouseDown };
+};
+
 const useNavigationState = (): NavigationState => {
   const [navigationState, setNavigationState] = useState<NavigationState>(emptyState);
 
@@ -1094,7 +1192,7 @@ const useSessionCommands = (): {
   isOpeningProject: boolean;
   handleOpenProject(): Promise<void>;
   handleFocusSession(sessionId: string): Promise<void>;
-  handleCloseSession(event: MouseEvent<HTMLButtonElement>, sessionId: string): Promise<void>;
+  handleCloseSession(event: ReactMouseEvent<HTMLButtonElement>, sessionId: string): Promise<void>;
 } => {
   const [isOpeningProject, setIsOpeningProject] = useState(false);
 
@@ -1122,7 +1220,7 @@ const useSessionCommands = (): {
   };
 
   const handleCloseSession = async (
-    event: MouseEvent<HTMLButtonElement>,
+    event: ReactMouseEvent<HTMLButtonElement>,
     sessionId: string,
   ): Promise<void> => {
     event.stopPropagation();
@@ -1682,10 +1780,18 @@ const MarkdownSurface = (): JSX.Element => {
     }, 1500);
   };
 
+  const floatingPillDrag = useFloatingPillDrag(presentation, (deltaX, deltaY) => {
+    void runMarkdownCommand({ action: 'moveFloatingPill', deltaX, deltaY });
+  });
+
   return (
     <main className="markdownSurface" {...getPanelHostAttributes(presentation)}>
       <section className="markdownSurface__panel">
-        <header className="markdownSurface__header">
+        <header
+          className={getSurfaceHeaderClassName('markdownSurface__header', presentation)}
+          onMouseDown={floatingPillDrag.onMouseDown}
+        >
+          <SurfaceWindowDragStrip presentation={presentation} />
           <div className="markdownSurface__eyebrow">View Page As MD</div>
           <div className="surfaceHeaderControls">
             <SurfacePresentationControl
@@ -1818,10 +1924,18 @@ const McpSurface = (): JSX.Element => {
     return fallback;
   };
 
+  const floatingPillDrag = useFloatingPillDrag(presentation, (deltaX, deltaY) => {
+    void runMcpCommand({ action: 'moveFloatingPill', deltaX, deltaY });
+  });
+
   return (
     <main className="mcpSurface" {...getPanelHostAttributes(presentation)}>
       <section className="mcpSurface__panel">
-        <header className="mcpSurface__header">
+        <header
+          className={getSurfaceHeaderClassName('mcpSurface__header', presentation)}
+          onMouseDown={floatingPillDrag.onMouseDown}
+        >
+          <SurfaceWindowDragStrip presentation={presentation} />
           <div className="mcpSurface__eyebrow">MCP Diagnostics</div>
           <div className="surfaceHeaderControls">
             <SurfacePresentationControl
@@ -2095,6 +2209,7 @@ const ProjectSurface = ({
   projectAgentLoginState: ProjectAgentLoginState;
   sessionState: SessionViewState;
 }): JSX.Element => {
+  const presentation = chromeAppearanceState.panelPreferences.project;
   const hasProject = chromeAppearanceState.projectRoot.trim().length > 0;
   const projectActionLabel =
     sessionState.role === 'project-session' ? 'Open Another Project' : 'Open Project';
@@ -2345,14 +2460,18 @@ const ProjectSurface = ({
             ? `Using legacy env fallback from ${legacyEnvNames.join(' and ')}.`
             : 'Using legacy env fallback.'
         : 'Save a repo-local agent login below to enable Use Agent Login on matching login pages.';
+  const floatingPillDrag = useFloatingPillDrag(presentation, (deltaX, deltaY) => {
+    void runChromeAppearanceCommand({ action: 'moveFloatingPill', deltaX, deltaY });
+  });
 
   return (
-    <main
-      className="projectSurface"
-      {...getPanelHostAttributes(chromeAppearanceState.panelPreferences.project)}
-    >
+    <main className="projectSurface" {...getPanelHostAttributes(presentation)}>
       <section className="projectSurface__panel">
-        <header className="projectSurface__header">
+        <header
+          className={getSurfaceHeaderClassName('projectSurface__header', presentation)}
+          onMouseDown={floatingPillDrag.onMouseDown}
+        >
+          <SurfaceWindowDragStrip presentation={presentation} />
           <div className="projectSurface__eyebrow">Project Settings</div>
           <div className="surfaceHeaderControls">
             <SurfacePresentationControl
@@ -2363,7 +2482,7 @@ const ProjectSurface = ({
                   side: next.side,
                 })
               }
-              presentation={chromeAppearanceState.panelPreferences.project}
+              presentation={presentation}
             />
           </div>
           <button
@@ -2908,10 +3027,18 @@ const StyleSurface = (): JSX.Element => {
     });
   };
 
+  const floatingPillDrag = useFloatingPillDrag(presentation, (deltaX, deltaY) => {
+    void runStyleCommand({ action: 'moveFloatingPill', deltaX, deltaY });
+  });
+
   return (
     <main className="styleSurface" {...getPanelHostAttributes(presentation)}>
       <section className="styleSurface__panel">
-        <header className="styleSurface__header">
+        <header
+          className={getSurfaceHeaderClassName('styleSurface__header', presentation)}
+          onMouseDown={floatingPillDrag.onMouseDown}
+        >
+          <SurfaceWindowDragStrip presentation={presentation} />
           <div className="styleSurface__eyebrow">Visual Style Overrides</div>
           <div className="surfaceHeaderControls">
             <SurfacePresentationControl
@@ -3237,10 +3364,18 @@ const FeedbackSurface = (): JSX.Element => {
     await copyTextToClipboard(JSON.stringify(activeAnnotation, null, 2));
   };
 
+  const floatingPillDrag = useFloatingPillDrag(presentation, (deltaX, deltaY) => {
+    void runFeedbackCommand({ action: 'moveFloatingPill', deltaX, deltaY });
+  });
+
   return (
     <main className="feedbackSurface" {...getPanelHostAttributes(presentation)}>
       <section className="feedbackSurface__panel">
-        <header className="feedbackSurface__header">
+        <header
+          className={getSurfaceHeaderClassName('feedbackSurface__header', presentation)}
+          onMouseDown={floatingPillDrag.onMouseDown}
+        >
+          <SurfaceWindowDragStrip presentation={presentation} />
           <div className="feedbackSurface__eyebrow">Selector Feedback Loop</div>
           <div className="surfaceHeaderControls">
             <SurfacePresentationControl

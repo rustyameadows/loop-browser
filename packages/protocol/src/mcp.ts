@@ -16,6 +16,7 @@ export const mcpViewActions = [
   'refresh',
   'selfTest',
   'setPresentation',
+  'moveFloatingPill',
 ] as const;
 export const mcpIndicatorColors = ['green', 'yellow', 'red'] as const;
 export const mcpLifecycleStates = ['starting', 'listening', 'stopped', 'error'] as const;
@@ -38,6 +39,11 @@ export type McpViewCommand =
       action: 'setPresentation';
       mode: PanelPresentationMode;
       side?: PanelSidebarSide;
+    }
+  | {
+      action: 'moveFloatingPill';
+      deltaX: number;
+      deltaY: number;
     };
 
 export interface McpRecentRequest {
@@ -153,6 +159,10 @@ export const isMcpViewCommand = (value: unknown): value is McpViewCommand => {
       isPanelPresentationMode(value.mode) &&
       (!('side' in value) || value.side === undefined || isPanelSidebarSide(value.side))
     );
+  }
+
+  if (value.action === 'moveFloatingPill') {
+    return typeof value.deltaX === 'number' && typeof value.deltaY === 'number';
   }
 
   return true;

@@ -17,6 +17,7 @@ export const styleViewActions = [
   'close',
   'toggle',
   'setPresentation',
+  'moveFloatingPill',
   'startInspectionFromSelection',
   'refreshInspection',
   'setOverrideDeclaration',
@@ -100,6 +101,11 @@ export type StyleViewCommand =
       action: 'setPresentation';
       mode: PanelPresentationMode;
       side?: PanelSidebarSide;
+    }
+  | {
+      action: 'moveFloatingPill';
+      deltaX: number;
+      deltaY: number;
     }
   | {
       action: 'startInspectionFromSelection';
@@ -272,6 +278,8 @@ export const isStyleViewCommand = (value: unknown): value is StyleViewCommand =>
         isPanelPresentationMode(value.mode) &&
         (!('side' in value) || value.side === undefined || isPanelSidebarSide(value.side))
       );
+    case 'moveFloatingPill':
+      return typeof value.deltaX === 'number' && typeof value.deltaY === 'number';
     case 'startInspectionFromSelection':
       return isElementDescriptor(value.selection);
     case 'setOverrideDeclaration':

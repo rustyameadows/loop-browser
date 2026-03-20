@@ -122,6 +122,26 @@ const buildSpawnArgs = (): { command: string; args: string[] } => ({
   args: process.argv.slice(1),
 });
 
+const isSessionProcessAlive = (pid: number): boolean => {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === 'EPERM') {
+      return true;
+    }
+    if (code === 'ESRCH') {
+      return false;
+    }
+    return false;
+  }
+};
+
 export const deriveClusterDir = (
   appDataDir = app.getPath('appData'),
 ): string => path.join(appDataDir, 'Loop Browser', 'cluster');
@@ -342,6 +362,37 @@ export class SessionDirectoryController {
     this.emit();
   }
 
+  private async removeSessionRecordFile(sessionId: string): Promise<void> {
+    await fs.rm(sessionRecordPath(this.options.clusterDir, sessionId), { force: true });
+  }
+
+  private async pruneStaleRecord(record: SessionRecord): Promise<boolean> {
+    if (isSessionProcessAlive(record.pid)) {
+      return false;
+    }
+
+    await this.removeSessionRecordFile(record.sessionId);
+    this.options.logger?.warn?.(
+      `Pruned stale session record for ${record.sessionId} after detecting dead pid ${record.pid}.`,
+    );
+    return true;
+  }
+
+  private async handlePossiblyStaleSession(
+    record: SessionRecord,
+    error: unknown,
+    action: 'focus' | 'close',
+  ): Promise<never> {
+    if (await this.pruneStaleRecord(record)) {
+      await this.refresh();
+      throw new Error(
+        `Could not ${action} session ${record.sessionId} because it had already crashed. Removed the stale launcher entry.`,
+      );
+    }
+
+    throw error instanceof Error ? error : new Error(`Session ${action} failed.`);
+  }
+
   private async refresh(): Promise<void> {
     const records = new Map<string, SessionRecord>();
 
@@ -355,8 +406,13 @@ export class SessionDirectoryController {
         }
 
         try {
-          const parsed = await readJsonFile(path.join(sessionRegistryDir(this.options.clusterDir), entry.name));
+          const parsed = await readJsonFile(
+            path.join(sessionRegistryDir(this.options.clusterDir), entry.name),
+          );
           if (isSessionRecord(parsed)) {
+            if (await this.pruneStaleRecord(parsed)) {
+              continue;
+            }
             records.set(parsed.sessionId, parsed);
           }
         } catch {
@@ -425,6 +481,7 @@ export class SessionDirectoryController {
       return;
     }
 
+    await this.refresh();
     const sessionId = deriveProjectSessionSlug(normalizedProjectRoot);
     const existing = this.sessionRecords.get(sessionId);
     if (existing) {
@@ -432,8 +489,15 @@ export class SessionDirectoryController {
         ...this.state,
         currentSessionId: sessionId,
       };
-      await this.focusSession(sessionId);
-      return;
+      try {
+        await this.focusSession(sessionId);
+        return;
+      } catch (error) {
+        if (!(await this.pruneStaleRecord(existing))) {
+          throw error;
+        }
+        await this.refresh();
+      }
     }
 
     const { command, args } = buildSpawnArgs();
@@ -470,6 +534,7 @@ export class SessionDirectoryController {
   }
 
   async focusSession(sessionId: string): Promise<void> {
+    await this.refresh();
     const record = this.sessionRecords.get(sessionId);
     if (!record) {
       throw new Error(`Could not find session ${sessionId}.`);
@@ -479,7 +544,11 @@ export class SessionDirectoryController {
       ...this.state,
       currentSessionId: sessionId,
     };
-    await fetchJsonRpc(record.connection.url, record.connection.token, 'internal/sessionFocus', {});
+    try {
+      await fetchJsonRpc(record.connection.url, record.connection.token, 'internal/sessionFocus', {});
+    } catch (error) {
+      await this.handlePossiblyStaleSession(record, error, 'focus');
+    }
 
     const startedAt = Date.now();
     while (Date.now() - startedAt < SESSION_FOCUS_TIMEOUT_MS) {
@@ -495,12 +564,17 @@ export class SessionDirectoryController {
   }
 
   async closeSession(sessionId: string): Promise<void> {
+    await this.refresh();
     const record = this.sessionRecords.get(sessionId);
     if (!record) {
       throw new Error(`Could not find session ${sessionId}.`);
     }
 
-    await fetchJsonRpc(record.connection.url, record.connection.token, 'internal/sessionClose', {});
+    try {
+      await fetchJsonRpc(record.connection.url, record.connection.token, 'internal/sessionClose', {});
+    } catch (error) {
+      await this.handlePossiblyStaleSession(record, error, 'close');
+    }
     const startedAt = Date.now();
     while (Date.now() - startedAt < SESSION_START_TIMEOUT_MS / 2) {
       await this.refresh();

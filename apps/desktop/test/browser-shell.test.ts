@@ -311,7 +311,7 @@ type BrowserShellHarness = {
       addChildView: ReturnType<typeof vi.fn>;
       removeChildView: ReturnType<typeof vi.fn>;
     };
-    close: ReturnType<typeof vi.fn>;
+    close(): void;
     getContentSize: () => [number, number];
   } | null;
   popoutSurface: PanelSurfaceId | null;
@@ -638,7 +638,8 @@ describe('BrowserShell', () => {
       mode: 'popout',
     });
 
-    expect(subject.window.contentView.removeChildView).toHaveBeenCalledWith(stylePanelView);
+    expect(subject.window).not.toBeNull();
+    expect(subject.window?.contentView.removeChildView).toHaveBeenCalledWith(stylePanelView);
     expect(subject.popoutSurface).toBe('style');
     expect(subject.popoutWindow?.contentView.addChildView).toHaveBeenCalledWith(stylePanelView);
     expect(shell.getChromeAppearanceState().panelPreferences.style).toEqual({ mode: 'popout' });
@@ -762,6 +763,51 @@ describe('BrowserShell', () => {
     expect(feedbackPanelView.setBounds).toHaveBeenLastCalledWith({
       x: 240,
       y: 196,
+      width: 720,
+      height: 680,
+    });
+  });
+
+  it('moves a floating-pill surface within the page viewport', async () => {
+    const shell = new BrowserShell({
+      projectAppearance: createProjectAppearanceRuntime(),
+    });
+    const subject = shell as unknown as BrowserShellHarness & {
+      layoutViews(): void;
+    };
+    const uiView = createFakePanelView();
+    const pageView = createFakePanelView();
+    const stylePanelView = createFakePanelView();
+
+    subject.window = {
+      contentView: {
+        addChildView: vi.fn(),
+        removeChildView: vi.fn(),
+      },
+      getContentSize: () => [1200, 900],
+    } as BrowserShellHarness['window'];
+    subject.uiView = uiView;
+    subject.pageView = pageView;
+    subject.stylePanelView = stylePanelView;
+    subject.stylePanelMounted = true;
+    subject.styleViewState = {
+      ...createEmptyStyleViewState(),
+      isOpen: true,
+    };
+    subject.chromeAppearanceState = {
+      ...createEmptyChromeAppearanceState(),
+      panelPreferences: {
+        ...createEmptyChromeAppearanceState().panelPreferences,
+        style: { mode: 'floating-pill' },
+      },
+    };
+
+    subject.layoutViews();
+    await shell.executeStyleViewCommand({ action: 'moveFloatingPill', deltaX: 40, deltaY: -20 });
+
+    expect(stylePanelView.setBounds).toHaveBeenLastCalledWith({
+      x: 280,
+      y: 176,
       width: 720,
       height: 680,
     });
