@@ -57,7 +57,6 @@ const emptyMarkdownState = createEmptyMarkdownViewState();
 const emptyMcpState = createEmptyMcpViewState();
 const emptyProjectAgentLoginState = createEmptyProjectAgentLoginState();
 const emptySessionState = createEmptySessionViewState();
-const stubTabs = ['Agent Chat', 'Inspector'];
 const AGENT_DONE_PULSE_MS = 1600;
 
 type SurfaceMode = 'chrome' | 'launcher' | 'markdown' | 'mcp' | 'feedback' | 'project';
@@ -71,6 +70,7 @@ type IconName =
   | 'crosshair'
   | 'file'
   | 'globe'
+  | 'key'
   | 'plus'
   | 'reload'
   | 'search'
@@ -101,40 +101,6 @@ const getSurfaceMode = (): SurfaceMode => {
 
   return 'chrome';
 };
-
-const getActiveTabLabel = (state: NavigationState): string => {
-  if (state.title && state.title !== 'Loop Browser') {
-    return state.title;
-  }
-
-  if (!state.url) {
-    return 'Start Page';
-  }
-
-  try {
-    const parsed = new URL(state.url);
-    return parsed.protocol === 'file:' ? 'Start Page' : parsed.hostname.replace(/^www\./, '');
-  } catch {
-    return state.url;
-  }
-};
-
-const getQuietStatus = (state: NavigationState): string => {
-  if (!state.url) {
-    return 'Single-tab preview | ready';
-  }
-
-  try {
-    const parsed = new URL(state.url);
-    const destination =
-      parsed.protocol === 'file:' ? 'local fixture' : parsed.hostname.replace(/^www\./, '');
-    return `Single-tab preview | ${destination}`;
-  } catch {
-    return 'Single-tab preview';
-  }
-};
-
-const getLocationIcon = (url: string): IconName => (url.startsWith('file:') ? 'file' : 'globe');
 
 const getSelectionHeading = (selection: ElementDescriptor): string => {
   const name = selection.accessibleName || selection.textSnippet;
@@ -544,6 +510,19 @@ const ChromeIcon = ({
           />
         </svg>
       );
+    case 'key':
+      return (
+        <svg fill="none" viewBox="0 0 20 20" {...props}>
+          <circle cx="6.75" cy="10.25" r="3.25" stroke="currentColor" strokeWidth="1.6" />
+          <path
+            d="M9.8 10.25H16.5m-2.25 0v2.1m-2.6-2.1v1.45"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.6"
+          />
+        </svg>
+      );
   }
 };
 
@@ -918,96 +897,116 @@ const useSessionCommands = (): {
   };
 };
 
-const SessionStrip = ({
+const ProjectBar = ({
+  chromeAppearanceState,
   sessionState,
+  onToggleProjectSettings,
 }: {
+  chromeAppearanceState: ChromeAppearanceState;
   sessionState: SessionViewState;
+  onToggleProjectSettings(): void;
 }): JSX.Element => {
   const { isOpeningProject, handleOpenProject, handleFocusSession, handleCloseSession } =
     useSessionCommands();
   const activeSessionId =
     sessionState.sessions.find((session) => session.isFocused)?.sessionId ??
     sessionState.currentSessionId;
+  const projectButtonLabel =
+    sessionState.role === 'project-session' ? 'Open another project' : 'Open project';
 
   return (
-    <section aria-label="Open projects" className="shell__projectStrip">
-      <div className="shell__projectStripLabel">
-        {sessionState.role === 'launcher' ? 'Launcher' : 'Projects'}
-      </div>
-
-      {sessionState.sessions.length > 0 ? (
-        <div className="shell__projectStripRail">
-          {sessionState.sessions.map((session) => {
-            const badgeForeground = getReadableForeground(session.chromeColor);
-            const isActive = activeSessionId === session.sessionId;
-
-            return (
-              <div
-                className={`shell__projectChip${
-                  isActive ? ' shell__projectChip--active' : ''
-                }`}
-                key={session.sessionId}
-              >
-                <button
-                  className="shell__projectChipFocus"
-                  onClick={() => void handleFocusSession(session.sessionId)}
-                  type="button"
-                >
-                  <span
-                    aria-hidden="true"
-                    className="shell__projectBadge"
-                    style={{
-                      backgroundColor: session.chromeColor,
-                      color: badgeForeground,
-                    }}
-                  >
-                    {getSessionBadgeLabel(session)}
-                  </span>
-                  <span className="shell__projectChipCopy">
-                    <span className="shell__projectChipTitle">{session.projectName}</span>
-                    <span className="shell__projectChipMeta">{getSessionChipMeta(session)}</span>
-                  </span>
-                </button>
-                <span className="shell__projectChipActions">
-                  <span
-                    aria-hidden="true"
-                    className={`shell__statusDot shell__statusDot--${
-                      session.status === 'error'
-                        ? 'red'
-                        : session.status === 'launching' || session.status === 'closing'
-                          ? 'yellow'
-                          : session.dockIconStatus === 'failed'
-                            ? 'red'
-                            : 'green'
-                    }`}
-                  />
-                  <button
-                    aria-label={`Close ${session.projectName}`}
-                    className="shell__projectChipClose"
-                    onClick={(event) => void handleCloseSession(event, session.sessionId)}
-                    type="button"
-                  >
-                    <ChromeIcon className="shell__icon" name="close" />
-                  </button>
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="shell__projectEmpty">
-          No projects are open yet. Open a folder to launch a dedicated Loop Browser session.
-        </div>
-      )}
-
-      <div className="shell__projectStripActions">
+    <section aria-label="Open projects" className="shell__projectBar">
+      <div className="shell__projectBarMain">
         <button
-          className="shell__pillButton shell__pillButton--muted"
+          aria-label={projectButtonLabel}
+          className="shell__navButton shell__navButton--projectLauncher"
           disabled={isOpeningProject}
           onClick={() => void handleOpenProject()}
+          title={projectButtonLabel}
           type="button"
         >
-          {isOpeningProject ? 'Opening...' : 'Open Project'}
+          <ChromeIcon className="shell__icon" name="plus" />
+        </button>
+
+        {sessionState.sessions.length > 0 ? (
+          <div className="shell__projectRail">
+            {sessionState.sessions.map((session) => {
+              const badgeForeground = getReadableForeground(session.chromeColor);
+              const isActive = activeSessionId === session.sessionId;
+
+              return (
+                <div
+                  className={`shell__projectChip${
+                    isActive ? ' shell__projectChip--active' : ''
+                  }`}
+                  key={session.sessionId}
+                >
+                  <button
+                    className="shell__projectChipFocus"
+                    onClick={() => void handleFocusSession(session.sessionId)}
+                    type="button"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="shell__projectBadge"
+                      style={{
+                        backgroundColor: session.chromeColor,
+                        color: badgeForeground,
+                      }}
+                    >
+                      {getSessionBadgeLabel(session)}
+                    </span>
+                    <span className="shell__projectChipCopy">
+                      <span className="shell__projectChipTitle">{session.projectName}</span>
+                      <span className="shell__projectChipMeta">{getSessionChipMeta(session)}</span>
+                    </span>
+                  </button>
+                  <span className="shell__projectChipActions">
+                    <span
+                      aria-hidden="true"
+                      className={`shell__statusDot shell__statusDot--${
+                        session.status === 'error'
+                          ? 'red'
+                          : session.status === 'launching' || session.status === 'closing'
+                            ? 'yellow'
+                            : session.dockIconStatus === 'failed'
+                              ? 'red'
+                              : 'green'
+                      }`}
+                    />
+                    <button
+                      aria-label={`Close ${session.projectName}`}
+                      className="shell__projectChipClose"
+                      onClick={(event) => void handleCloseSession(event, session.sessionId)}
+                      type="button"
+                    >
+                      <ChromeIcon className="shell__icon" name="close" />
+                    </button>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="shell__projectEmpty">
+            No projects are open yet. Use + to open one.
+          </div>
+        )}
+      </div>
+
+      <div className="shell__projectBarActions">
+        <button
+          aria-label={
+            chromeAppearanceState.isOpen ? 'Close project settings' : 'Open project settings'
+          }
+          aria-pressed={chromeAppearanceState.isOpen}
+          className={`shell__pillButton shell__pillButton--project${
+            chromeAppearanceState.isOpen ? ' shell__pillButton--projectActive' : ''
+          }`}
+          onClick={onToggleProjectSettings}
+          type="button"
+        >
+          <span>Project Settings</span>
         </button>
       </div>
     </section>
@@ -1149,22 +1148,12 @@ const ChromeSurface = ({
   const mcpPresence = useMcpPresence(mcpViewState);
   const [draftUrl, setDraftUrl] = useState('');
   const [isEditingAddress, setIsEditingAddress] = useState(false);
-  const [copyFeedback, setCopyFeedback] = useState('Copy JSON');
-  const copyTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!isEditingAddress) {
       setDraftUrl(navigationState.url);
     }
   }, [isEditingAddress, navigationState.url]);
-
-  useEffect(() => {
-    return () => {
-      if (copyTimerRef.current !== null) {
-        window.clearTimeout(copyTimerRef.current);
-      }
-    };
-  }, []);
 
   const runCommand = async (command: NavigationCommand): Promise<void> => {
     const nextState = await window.agentBrowser.execute(command);
@@ -1200,73 +1189,17 @@ const ChromeSurface = ({
     await runCommand({ action: 'navigate', target: draftUrl });
   };
 
-  const handleCopyDescriptor = async (): Promise<void> => {
-    if (!pickerState.lastSelection) {
-      return;
-    }
-
-    const didCopy = await copyTextToClipboard(
-      JSON.stringify(pickerState.lastSelection, null, 2),
-    );
-    setCopyFeedback(didCopy ? 'Copied' : 'Copy failed');
-
-    if (copyTimerRef.current !== null) {
-      window.clearTimeout(copyTimerRef.current);
-    }
-
-    copyTimerRef.current = window.setTimeout(() => {
-      setCopyFeedback('Copy JSON');
-      copyTimerRef.current = null;
-    }, 1500);
+  const handleToggleProjectSettings = (): void => {
+    void runChromeAppearanceCommand({
+      action: chromeAppearanceState.isOpen ? 'close' : 'open',
+    });
   };
 
-  const activeTabLabel = getActiveTabLabel(navigationState);
-  const locationIcon = getLocationIcon(navigationState.url);
-  const selection = pickerState.lastSelection;
-  const draftSelection = feedbackState.draft.selection;
-  const activeAnnotation =
-    feedbackState.annotations.find((annotation) => annotation.id === feedbackState.activeAnnotationId) ??
-    null;
-  const openAnnotationCount = feedbackState.annotations.filter(
-    (annotation) => annotation.status === 'open' || annotation.status === 'acknowledged' || annotation.status === 'in_progress',
-  ).length;
-  const inspectorHeading = pickerState.enabled
-    ? 'Pick mode is active'
-    : draftSelection
-      ? `Draft ready for ${getSelectionHeading(draftSelection)}`
-      : selection
-        ? getSelectionHeading(selection)
-      : activeAnnotation
-        ? getSelectionHeading(activeAnnotation.selection)
-      : 'DOM picker ready';
-  const inspectorMeta = pickerState.enabled
-    ? 'Click any element in the page, or press Esc to cancel.'
-    : draftSelection
-      ? 'Add context, classify the issue, and let the agent respond in the feedback panel.'
-      : selection
-        ? getSelectionMeta(selection)
-      : activeAnnotation
-        ? `${getSelectionMeta(activeAnnotation.selection)} | ${
-            mcpPresence.message ?? getFeedbackStatusLabel(activeAnnotation.status)
-          }`
-      : 'Use the crosshair button or View > Toggle Pick Mode.';
-  const diagnosticLabel =
-    sessionState.lastError ??
-    navigationState.lastError ??
-    (mcpPresence.isBusy || mcpPresence.isDonePulse
-      ? mcpPresence.message ?? 'Agent working via MCP.'
-      : getQuietStatus(navigationState));
-  const mcpButtonLabel = mcpPresence.isBusy
-    ? 'Agent Working'
-    : mcpPresence.isDonePulse
-      ? 'Agent Updated'
-      : 'MCP Status';
   const mcpButtonAriaLabel = mcpPresence.isBusy
-    ? `Agent working via MCP${mcpPresence.message ? `: ${mcpPresence.message}` : ''}`
+    ? `MCP is busy${mcpPresence.message ? `: ${mcpPresence.message}` : ''}`
     : mcpPresence.isDonePulse
-      ? `Agent update complete${mcpPresence.message ? `: ${mcpPresence.message}` : ''}`
-      : `MCP status: ${mcpViewState.statusLabel}`;
-  const currentProjectIconSrc = projectIconSrc(chromeAppearanceState.resolvedProjectIconPath);
+      ? `MCP updated${mcpPresence.message ? `: ${mcpPresence.message}` : ''}`
+      : `MCP: ${mcpViewState.statusLabel}`;
   const agentLoginButtonTitle =
     navigationState.agentLoginCta.reason ??
     'Fill the detected login form with the configured agent login.';
@@ -1278,58 +1211,11 @@ const ChromeSurface = ({
           mcpPresence.isBusy ? ' shell__panel--busy' : ''
         }${mcpPresence.isDonePulse ? ' shell__panel--done' : ''}`}
       >
-        <div className="shell__tabstrip">
-          <div className="shell__tabRail">
-            <div aria-hidden="true" className="shell__newTab">
-              <ChromeIcon className="shell__icon" name="plus" />
-            </div>
-
-            <div
-              className={`shell__tab shell__tab--active${
-                navigationState.isLoading ? ' shell__tab--loading' : ''
-              }`}
-            >
-              <span
-                className={`shell__tabIndicator${
-                  navigationState.isLoading ? ' shell__tabIndicator--loading' : ''
-                }`}
-              />
-              <span className="shell__tabTitle">{activeTabLabel}</span>
-            </div>
-
-            {stubTabs.map((label) => (
-              <div aria-hidden="true" className="shell__tab shell__tab--stub" key={label}>
-                <span className="shell__tabIndicator shell__tabIndicator--stub" />
-                <span className="shell__tabTitle">{label}</span>
-              </div>
-            ))}
-          </div>
-
-          <div className="shell__utilityRail">
-            <div aria-hidden="true" className="shell__utility shell__utility--icon">
-              <ChromeIcon className="shell__icon" name="search" />
-            </div>
-            <div aria-hidden="true" className="shell__utility shell__utility--icon">
-              <ChromeIcon className="shell__icon" name="sparkles" />
-            </div>
-            <div aria-hidden="true" className="shell__utility shell__utility--pill">
-              Ask Agent
-            </div>
-            <div aria-hidden="true" className="shell__profileStub">
-              {currentProjectIconSrc ? (
-                <img
-                  alt=""
-                  className="shell__profileImage"
-                  src={currentProjectIconSrc}
-                />
-              ) : (
-                'LB'
-              )}
-            </div>
-          </div>
-        </div>
-
-        <SessionStrip sessionState={sessionState} />
+        <ProjectBar
+          chromeAppearanceState={chromeAppearanceState}
+          onToggleProjectSettings={handleToggleProjectSettings}
+          sessionState={sessionState}
+        />
 
         <form className="shell__toolbar" onSubmit={(event) => void handleSubmit(event)}>
           <div className="shell__nav">
@@ -1366,9 +1252,6 @@ const ChromeSurface = ({
           <label className="shell__omnibox">
             <span className="shell__srOnly">Address</span>
             <span className="shell__omniboxFrame">
-              <span aria-hidden="true" className="shell__omniboxIcon">
-                <ChromeIcon className="shell__icon shell__icon--muted" name={locationIcon} />
-              </span>
               <input
                 autoCapitalize="off"
                 autoCorrect="off"
@@ -1378,7 +1261,7 @@ const ChromeSurface = ({
                 onBlur={() => setIsEditingAddress(false)}
                 onChange={(event) => setDraftUrl(event.target.value)}
                 onFocus={() => setIsEditingAddress(true)}
-                placeholder="Search or enter website name"
+                placeholder="Enter URL or local address"
                 spellCheck={false}
                 type="text"
                 value={draftUrl}
@@ -1386,9 +1269,9 @@ const ChromeSurface = ({
             </span>
           </label>
 
-          <div className="shell__toolbarEdge">
+          <div className="shell__toolbarActions">
             <button
-              aria-label={pickerState.enabled ? 'Disable pick mode' : 'Enable pick mode'}
+              aria-label={pickerState.enabled ? 'Disable inspect mode' : 'Enable inspect mode'}
               aria-pressed={pickerState.enabled}
               className={`shell__navButton shell__navButton--picker${
                 pickerState.enabled ? ' shell__navButton--pickerActive' : ''
@@ -1398,45 +1281,44 @@ const ChromeSurface = ({
             >
               <ChromeIcon className="shell__icon" name="crosshair" />
             </button>
+            <button
+              aria-label={
+                markdownViewState.isOpen ? 'Close Markdown view' : 'View page as Markdown'
+              }
+              aria-pressed={markdownViewState.isOpen}
+              className={`shell__navButton shell__navButton--md${
+                markdownViewState.isOpen ? ' shell__navButton--mdActive' : ''
+              }`}
+              disabled={navigationState.isLoading}
+              onClick={() =>
+                void runMarkdownCommand({
+                  action: markdownViewState.isOpen ? 'close' : 'open',
+                })
+              }
+              title="View page as Markdown"
+              type="button"
+            >
+              <ChromeIcon className="shell__icon" name="book" />
+            </button>
             {navigationState.agentLoginCta.visible ? (
               <button
-                aria-label="Use agent login"
-                className="shell__pillButton shell__pillButton--muted"
+                aria-label="Use Agent Login"
+                className="shell__navButton shell__navButton--login"
                 disabled={!navigationState.agentLoginCta.enabled}
                 onClick={() => void runCommand({ action: 'useAgentLogin' })}
                 title={agentLoginButtonTitle}
                 type="button"
               >
-                <span>Use Agent Login</span>
+                <ChromeIcon className="shell__icon" name="key" />
               </button>
             ) : null}
             <button
               aria-label={
-                chromeAppearanceState.isOpen ? 'Close project style' : 'Open project style'
-              }
-              aria-pressed={chromeAppearanceState.isOpen}
-              className={`shell__pillButton shell__pillButton--project${
-                chromeAppearanceState.isOpen ? ' shell__pillButton--projectActive' : ''
-              }`}
-              onClick={() =>
-                void runChromeAppearanceCommand({
-                  action: chromeAppearanceState.isOpen ? 'close' : 'open',
-                })
-              }
-              type="button"
-            >
-              <ChromeIcon className="shell__icon" name="sliders" />
-              <span>Project Style</span>
-            </button>
-            <button
-              aria-label={
-                feedbackState.isOpen
-                  ? 'Close feedback loop'
-                  : `Open feedback loop${openAnnotationCount ? ` (${openAnnotationCount} open)` : ''}`
+                feedbackState.isOpen ? 'Close agent panel' : 'Open agent panel'
               }
               aria-pressed={feedbackState.isOpen}
-              className={`shell__pillButton shell__pillButton--feedback${
-                feedbackState.isOpen ? ' shell__pillButton--feedbackActive' : ''
+              className={`shell__pillButton shell__pillButton--agent${
+                feedbackState.isOpen ? ' shell__pillButton--agentActive' : ''
               }`}
               onClick={() =>
                 void runFeedbackCommand({
@@ -1445,25 +1327,7 @@ const ChromeSurface = ({
               }
               type="button"
             >
-              <span className="shell__feedbackCount">{openAnnotationCount}</span>
-              <span>Feedback Loop</span>
-            </button>
-            <button
-              aria-label={markdownViewState.isOpen ? 'Close Markdown view' : 'View page as Markdown'}
-              aria-pressed={markdownViewState.isOpen}
-              className={`shell__pillButton shell__pillButton--md${
-                markdownViewState.isOpen ? ' shell__pillButton--mdActive' : ''
-              }`}
-              disabled={navigationState.isLoading}
-              onClick={() =>
-                void runMarkdownCommand({
-                  action: markdownViewState.isOpen ? 'close' : 'open',
-                })
-              }
-              type="button"
-            >
-              <ChromeIcon className="shell__icon" name="book" />
-              <span>View as MD</span>
+              <span>Agent</span>
             </button>
             <button
               aria-label={mcpButtonAriaLabel}
@@ -1481,73 +1345,10 @@ const ChromeSurface = ({
               title={mcpPresence.message ?? mcpViewState.statusLabel}
               type="button"
             >
-              <span
-                aria-hidden="true"
-                className={`shell__statusDot shell__statusDot--${mcpViewState.indicator}${
-                  mcpPresence.isBusy ? ' shell__statusDot--busy' : ''
-                }${mcpPresence.isDonePulse ? ' shell__statusDot--done' : ''}`}
-              />
-              <span>{mcpButtonLabel}</span>
-            </button>
-            <button aria-label="Load address" className="shell__goButton" type="submit">
-              <ChromeIcon className="shell__icon" name="arrowUpRight" />
+              <span>MCP</span>
             </button>
           </div>
         </form>
-
-        <div
-          className={`shell__diagnostic${
-            navigationState.lastError || sessionState.lastError ? ' shell__diagnostic--error' : ''
-          }`}
-        >
-          {diagnosticLabel}
-        </div>
-
-        <div
-          className={`shell__selectionBar${
-            pickerState.enabled ? ' shell__selectionBar--armed' : ''
-          }${selection || draftSelection || activeAnnotation ? ' shell__selectionBar--filled' : ''}`}
-        >
-          <div className="shell__selectionCopy">
-            <div className="shell__selectionTitle">{inspectorHeading}</div>
-            <div className="shell__selectionMeta">{inspectorMeta}</div>
-          </div>
-
-          <div className="shell__selectionActions">
-            {draftSelection ? (
-              <button
-                className="shell__pillButton"
-                onClick={() => void runFeedbackCommand({ action: 'open' })}
-                type="button"
-              >
-                Open Draft
-              </button>
-            ) : null}
-            {activeAnnotation ? (
-              <span
-                className={`shell__feedbackStatus shell__feedbackStatus--${getFeedbackStatusTone(
-                  activeAnnotation.status,
-                )}`}
-              >
-                {getFeedbackStatusLabel(activeAnnotation.status)}
-              </span>
-            ) : null}
-            {selection ? (
-              <button className="shell__pillButton" onClick={handleCopyDescriptor} type="button">
-                {copyFeedback}
-              </button>
-            ) : null}
-            {selection ? (
-              <button
-                className="shell__pillButton shell__pillButton--muted"
-                onClick={() => void runPickerCommand({ action: 'clearSelection' })}
-                type="button"
-              >
-                Clear
-              </button>
-            ) : null}
-          </div>
-        </div>
       </section>
     </main>
   );
@@ -2230,9 +2031,9 @@ const ProjectSurface = ({
     <main className="projectSurface">
       <section className="projectSurface__panel">
         <header className="projectSurface__header">
-          <div className="projectSurface__eyebrow">Project Style</div>
+          <div className="projectSurface__eyebrow">Project Settings</div>
           <button
-            aria-label="Close project style"
+            aria-label="Close project settings"
             className="projectSurface__iconButton"
             onClick={() => void runChromeAppearanceCommand({ action: 'close' })}
             type="button"
@@ -2243,11 +2044,11 @@ const ProjectSurface = ({
 
         <section className="projectSurface__hero">
           <div>
-            <div className="projectSurface__title">Style this project and keep it distinct.</div>
+            <div className="projectSurface__title">Set up this project and keep it distinct.</div>
             <div className="projectSurface__subtitle">
               Choose a project folder, then Loop Browser will read and write
               <code> .loop-browser.json </code>
-              there and use that file to control the chrome.
+              there and use that file to control the project settings for this window.
             </div>
           </div>
           <div className="projectSurface__heroMeta">
@@ -2462,7 +2263,7 @@ const ProjectSurface = ({
                 onClick={() => void handleSaveAppearance()}
                 type="button"
               >
-                Save Style
+                Save Appearance
               </button>
               <button
                 className="shell__pillButton shell__pillButton--muted"

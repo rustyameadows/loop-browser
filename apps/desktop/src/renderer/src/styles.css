@@ -82,10 +82,10 @@ input {
 
 .shell__panel {
   display: grid;
-  grid-template-rows: auto auto auto auto auto;
-  gap: 4px;
+  grid-template-rows: auto auto;
+  gap: 8px;
   height: 100%;
-  padding: 6px 12px;
+  padding: 8px 12px;
   background: linear-gradient(180deg, var(--chrome-bg-top), var(--chrome-bg-bottom));
   border-bottom: 1px solid var(--border);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.88);
@@ -118,16 +118,12 @@ input {
     inset 0 6px 26px rgba(26, 167, 114, 0.08);
 }
 
-.shell__tabstrip,
-.shell__projectStrip,
-.shell__toolbar,
-.shell__diagnostic,
-.shell__selectionBar {
+.shell__projectBar,
+.shell__toolbar {
   -webkit-app-region: drag;
 }
 
 .shell__navButton,
-.shell__goButton,
 .shell__pillButton,
 .shell__projectChipFocus,
 .shell__projectChipClose,
@@ -146,51 +142,33 @@ a {
   -webkit-app-region: no-drag;
 }
 
-.shell__tabstrip {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+.shell__projectBar,
+.shell__projectBarMain,
+.shell__projectBarActions,
+.shell__nav,
+.shell__toolbarActions {
+  display: flex;
   align-items: center;
+}
+
+.shell__projectBar {
+  justify-content: space-between;
   gap: 12px;
   min-height: 34px;
   padding-left: 76px;
 }
 
-.shell__tabRail,
-.shell__utilityRail,
-.shell__nav,
-.shell__toolbarEdge {
-  display: flex;
-  align-items: center;
-}
-
-.shell__tabRail {
-  gap: 8px;
+.shell__projectBarMain {
+  flex: 1 1 auto;
+  gap: 10px;
   min-width: 0;
 }
 
-.shell__utilityRail,
-.shell__toolbarEdge {
-  gap: 8px;
-  min-width: max-content;
-}
-
-.shell__projectStrip {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 34px;
-}
-
-.shell__projectStripLabel {
+.shell__projectBarActions {
   flex: none;
-  color: var(--chrome-muted);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
-.shell__projectStripRail {
+.shell__projectRail {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -199,15 +177,8 @@ a {
   padding-bottom: 2px;
 }
 
-.shell__projectStripRail::-webkit-scrollbar {
+.shell__projectRail::-webkit-scrollbar {
   display: none;
-}
-
-.shell__projectStripActions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
 }
 
 .shell__projectEmpty {
@@ -306,118 +277,19 @@ a {
   color: var(--chrome-control-fg);
 }
 
-.shell__newTab,
-.shell__utility,
-.shell__toolbarStub,
-.shell__profileStub,
-.shell__navButton,
-.shell__goButton {
+.shell__navButton {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
-}
-
-.shell__newTab,
-.shell__utility--icon,
-.shell__toolbarStub,
-.shell__navButton {
   width: 34px;
   height: 34px;
+  padding: 0;
   border: 1px solid var(--chrome-control-border);
   border-radius: 11px;
   background: var(--chrome-control-bg);
   color: var(--chrome-control-fg);
   box-shadow: var(--shadow);
-}
-
-.shell__tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  max-width: 240px;
-  padding: 7px 12px;
-  border: 1px solid transparent;
-  border-radius: 13px;
-  font-size: 13px;
-  line-height: 1;
-  color: var(--chrome-muted-strong);
-}
-
-.shell__tab--active {
-  background: var(--chrome-control-bg);
-  border-color: var(--chrome-control-border);
-  box-shadow: var(--shadow);
-  color: var(--chrome-control-fg);
-}
-
-.shell__tab--stub {
-  background: var(--chrome-control-bg);
-  border-color: var(--chrome-control-border);
-  color: var(--chrome-control-muted-fg);
-}
-
-.shell__tab--loading {
-  border-color: rgba(var(--accent-rgb), 0.28);
-}
-
-.shell__tabIndicator {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--chrome-control-muted-fg);
-}
-
-.shell__tabIndicator--loading {
-  background: var(--chrome-accent-strong-bg);
-  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.15);
-  animation: shell-pulse 1.35s ease-in-out infinite;
-}
-
-.shell__tabIndicator--stub {
-  background: var(--chrome-control-border);
-}
-
-.shell__tabTitle {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.shell__utility--pill {
-  height: 34px;
-  padding: 0 14px;
-  border: 1px solid var(--chrome-accent-strong-border);
-  border-radius: 999px;
-  background: var(--chrome-accent-strong-bg);
-  color: var(--chrome-accent-strong-fg);
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-  box-shadow:
-    var(--shadow),
-    0 0 0 3px rgba(var(--accent-rgb), 0.08);
-}
-
-.shell__profileStub {
-  overflow: hidden;
-  width: 32px;
-  height: 32px;
-  border: 1px solid var(--chrome-control-border);
-  border-radius: 999px;
-  background: var(--chrome-control-bg);
-  color: var(--chrome-control-fg);
-  font-size: 11px;
-  font-weight: 700;
-  box-shadow: var(--shadow);
-}
-
-.shell__profileImage {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
 }
 
 .shell__toolbar {
@@ -432,8 +304,9 @@ a {
   gap: 8px;
 }
 
-.shell__navButton {
-  padding: 0;
+.shell__toolbarActions {
+  gap: 8px;
+  min-width: max-content;
 }
 
 .shell__navButton:disabled {
@@ -443,18 +316,21 @@ a {
   cursor: not-allowed;
 }
 
-.shell__navButton:not(:disabled):hover,
-.shell__goButton:hover {
+.shell__navButton:not(:disabled):hover {
   border-color: var(--chrome-control-border);
   background: var(--chrome-control-hover-bg);
 }
 
+.shell__navButton--projectLauncher,
+.shell__navButton--md,
+.shell__navButton--login,
 .shell__navButton--picker {
   color: var(--chrome-accent-soft-fg);
   border-color: var(--chrome-accent-soft-border);
   background: var(--chrome-accent-soft-bg);
 }
 
+.shell__navButton--mdActive,
 .shell__navButton--pickerActive {
   color: var(--chrome-accent-strong-fg);
   border-color: var(--chrome-accent-strong-border);
@@ -471,8 +347,7 @@ a {
 .shell__omniboxFrame {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 38px;
+  min-height: 40px;
   padding: 0 14px;
   border: 1px solid var(--chrome-control-border);
   border-radius: 18px;
@@ -487,17 +362,13 @@ a {
     0 0 0 3px rgba(var(--accent-rgb), 0.12);
 }
 
-.shell__omniboxIcon {
-  color: var(--chrome-control-muted-fg);
-}
-
 .shell__omniboxInput {
   width: 100%;
   border: 0;
   padding: 0;
   background: transparent;
   color: var(--chrome-control-fg);
-  font-size: 15px;
+  font-size: 14px;
   outline: none;
 }
 
@@ -507,92 +378,6 @@ a {
 
 .shell__omniboxInput--editing {
   color: var(--chrome-control-fg);
-}
-
-.shell__goButton {
-  width: 38px;
-  height: 38px;
-  border: 1px solid var(--chrome-accent-soft-border);
-  border-radius: 14px;
-  background: var(--chrome-accent-soft-bg);
-  color: var(--chrome-accent-soft-fg);
-  box-shadow: var(--shadow);
-}
-
-.shell__diagnostic {
-  min-height: 14px;
-  padding: 0 4px 0 2px;
-  color: var(--chrome-muted);
-  font-size: 10.5px;
-  line-height: 1.2;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  transition: color 180ms ease;
-}
-
-.shell__diagnostic--error {
-  padding: 5px 10px;
-  border: 1px solid var(--error-border);
-  border-radius: 12px;
-  background: var(--error-bg);
-  color: var(--error-text);
-  font-size: 12px;
-}
-
-.shell__selectionBar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  min-height: 32px;
-  padding: 6px 10px;
-  border: 1px solid var(--chrome-control-border);
-  border-radius: 14px;
-  background: var(--chrome-control-bg);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
-  transition:
-    border-color 180ms ease,
-    background 180ms ease,
-    box-shadow 180ms ease;
-}
-
-.shell__selectionBar--armed {
-  border-color: var(--chrome-accent-soft-border);
-  background: var(--chrome-accent-soft-bg);
-}
-
-.shell__selectionBar--filled {
-  border-color: var(--chrome-control-border);
-}
-
-.shell__selectionCopy {
-  min-width: 0;
-}
-
-.shell__selectionTitle {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--chrome-control-fg);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.shell__selectionMeta {
-  margin-top: 1px;
-  color: var(--chrome-control-muted-fg);
-  font-size: 10.5px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.shell__selectionActions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 
 .shell__pillButton {
@@ -656,29 +441,23 @@ a {
   color: #8d6703;
 }
 
-.shell__pillButton--md {
+.shell__pillButton--agent,
+.shell__pillButton--mcp,
+.shell__pillButton--project {
   min-height: 34px;
-  padding: 0 13px;
-  color: var(--chrome-accent-soft-fg);
+  padding: 0 14px;
 }
 
-.shell__pillButton--mdActive {
-  border-color: var(--chrome-accent-strong-border);
-  background: var(--chrome-accent-strong-bg);
-  color: var(--chrome-accent-strong-fg);
-}
-
-.shell__pillButton--mcp {
-  min-height: 34px;
-  padding: 0 13px;
-  border-color: var(--chrome-control-border);
-  color: var(--chrome-control-muted-fg);
-}
-
+.shell__pillButton--agentActive,
 .shell__pillButton--mcpActive {
   border-color: var(--chrome-accent-soft-border);
   background: var(--chrome-accent-soft-bg);
   color: var(--chrome-accent-soft-fg);
+}
+
+.shell__pillButton--mcp {
+  border-color: var(--chrome-control-border);
+  color: var(--chrome-control-muted-fg);
 }
 
 .shell__pillButton--mcpBusy {
@@ -691,8 +470,6 @@ a {
 }
 
 .shell__pillButton--project {
-  min-height: 34px;
-  padding: 0 13px;
   background: var(--chrome-accent-soft-bg);
   color: var(--chrome-accent-soft-fg);
 }
@@ -710,33 +487,6 @@ a {
   border-color: rgba(26, 167, 114, 0.32);
   background: linear-gradient(180deg, #effcf5, #dff6e8);
   color: #15764f;
-}
-
-.shell__pillButton--feedback {
-  min-height: 34px;
-  padding: 0 13px 0 10px;
-  border-color: #d8d5fb;
-  background: linear-gradient(180deg, #f7f5ff, #efeaff);
-  color: #4f3db8;
-}
-
-.shell__pillButton--feedbackActive {
-  border-color: rgba(79, 61, 184, 0.4);
-  background: linear-gradient(180deg, #efe9ff, #e4dbff);
-  color: #3f2fa1;
-}
-
-.shell__feedbackCount {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: 999px;
-  background: rgba(79, 61, 184, 0.12);
-  font-size: 11px;
-  font-weight: 700;
 }
 
 .shell__feedbackStatus {
@@ -808,30 +558,12 @@ a {
   animation: shell-success-pulse 1s ease-out 1;
 }
 
-.shell__panel--busy .shell__tab--active,
-.shell__panel--busy .shell__selectionBar {
+.shell__panel--busy .shell__omniboxFrame {
   border-color: rgba(var(--accent-rgb), 0.24);
 }
 
-.shell__panel--busy .shell__selectionBar {
-  background: rgba(237, 246, 255, 0.9);
-}
-
-.shell__panel--busy .shell__diagnostic {
-  color: #0f5ab1;
-}
-
-.shell__panel--done .shell__tab--active,
-.shell__panel--done .shell__selectionBar {
+.shell__panel--done .shell__omniboxFrame {
   border-color: rgba(26, 167, 114, 0.24);
-}
-
-.shell__panel--done .shell__selectionBar {
-  background: rgba(241, 251, 245, 0.9);
-}
-
-.shell__panel--done .shell__diagnostic {
-  color: #15764f;
 }
 
 .launcherSurface {
@@ -2145,13 +1877,8 @@ a {
 }
 
 @media (max-width: 1040px) {
-  .shell__tabstrip {
+  .shell__projectBar {
     padding-left: 70px;
-  }
-
-  .shell__tab--stub:first-of-type,
-  .shell__utility--pill {
-    display: none;
   }
 }
 
@@ -2173,43 +1900,16 @@ a {
     justify-content: flex-start;
   }
 
-  .shell__projectStrip {
-    flex-wrap: wrap;
-    align-items: flex-start;
-  }
-
-  .shell__projectStripRail {
-    order: 3;
-    width: 100%;
-  }
-
-  .shell__projectStripActions {
-    margin-left: 0;
-  }
-
-  .shell__toolbar {
-    grid-template-columns: 1fr;
-  }
-
-  .shell__toolbarEdge {
-    justify-content: flex-end;
-  }
-
-  .shell__tabstrip {
-    grid-template-columns: 1fr;
+  .shell__projectBar {
     padding-left: 70px;
   }
 
-  .shell__utilityRail {
-    display: none;
+  .shell__toolbar {
+    gap: 8px;
   }
 
-  .shell__selectionBar {
-    grid-template-columns: 1fr;
-  }
-
-  .shell__selectionActions {
-    justify-content: flex-end;
+  .shell__toolbarActions {
+    gap: 6px;
   }
 
   .markdownSurface__panel {

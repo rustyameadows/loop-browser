@@ -2545,7 +2545,7 @@ export class BrowserShell {
     if (!configuredOrigin) {
       return {
         ...defaultState,
-        reason: 'Set Default URL in Project Style to scope Use Agent Login to your app.',
+        reason: 'Set Default URL in Project Settings to scope Use Agent Login to your app.',
       };
     }
 

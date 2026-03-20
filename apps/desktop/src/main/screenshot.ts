@@ -6,7 +6,7 @@ import type {
   WindowRect,
 } from '@agent-browser/protocol';
 
-export const CHROME_HEIGHT = 152;
+export const CHROME_HEIGHT = 98;
 export const SIDE_PANEL_WIDTH = 460;
 export const SIDE_PANEL_BREAKPOINT = 1100;
 
