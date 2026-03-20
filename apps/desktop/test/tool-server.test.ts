@@ -174,6 +174,8 @@ describe('ToolServer', () => {
                       note: feedbackState.draft.note,
                       kind: feedbackState.draft.kind,
                       priority: feedbackState.draft.priority,
+                      intent: feedbackState.draft.intent,
+                      styleTweaks: feedbackState.draft.styleTweaks,
                       status: 'open',
                       createdAt: '2026-03-14T00:00:00.000Z',
                       updatedAt: '2026-03-14T00:00:00.000Z',
@@ -407,6 +409,9 @@ describe('ToolServer', () => {
     expect(resourcesListPayload.result.resources.map((resource) => resource.uri)).toContain(
       `loop-browser:///session/${sessionSummary.sessionId}/summary`,
     );
+    expect(resourcesListPayload.result.resources.map((resource) => resource.uri)).toContain(
+      `loop-browser:///session/${sessionSummary.sessionId}/feedback`,
+    );
 
     const resourceTemplatesResponse = await fetch(connection.url, {
       method: 'POST',
@@ -619,6 +624,21 @@ describe('ToolServer', () => {
     });
     expect(feedbackStatusResponse.status).toBe(200);
 
+    feedbackState = {
+      ...feedbackState,
+      annotations: feedbackState.annotations.map((annotation) => ({
+        ...annotation,
+        intent: 'style',
+        styleTweaks: [
+          {
+            property: 'color',
+            value: '#ffffff',
+            previousValue: 'rgb(0, 0, 0)',
+          },
+        ],
+      })),
+    };
+
     const feedbackStateResponse = await fetch(connection.url, {
       method: 'POST',
       headers: {
@@ -643,6 +663,8 @@ describe('ToolServer', () => {
             annotations: Array<{
               id: string;
               status: string;
+              intent: string;
+              styleTweaks: Array<{ property: string; value: string; previousValue: string }>;
               replies: Array<{ author: string }>;
             }>;
           };
@@ -653,9 +675,46 @@ describe('ToolServer', () => {
     expect(feedbackStatePayload.result.structuredContent.feedback.annotations[0]?.status).toBe(
       'in_progress',
     );
+    expect(feedbackStatePayload.result.structuredContent.feedback.annotations[0]?.intent).toBe(
+      'style',
+    );
+    expect(
+      feedbackStatePayload.result.structuredContent.feedback.annotations[0]?.styleTweaks[0],
+    ).toEqual({
+      property: 'color',
+      value: '#ffffff',
+      previousValue: 'rgb(0, 0, 0)',
+    });
     expect(
       feedbackStatePayload.result.structuredContent.feedback.annotations[0]?.replies[0]?.author,
     ).toBe('agent');
+
+    const feedbackResourceResponse = await fetch(connection.url, {
+      method: 'POST',
+      headers: mcpHeaders,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'feedback-resource',
+        method: 'resources/read',
+        params: {
+          uri: `loop-browser:///session/${sessionSummary.sessionId}/feedback`,
+        },
+      }),
+    });
+    expect(feedbackResourceResponse.status).toBe(200);
+    const feedbackResourcePayload = (await feedbackResourceResponse.json()) as {
+      result: {
+        contents: Array<{ text: string }>;
+      };
+    };
+    expect(
+      JSON.parse(feedbackResourcePayload.result.contents[0]?.text ?? '{}').feedback.annotations[0]
+        ?.styleTweaks[0],
+    ).toEqual({
+      property: 'color',
+      value: '#ffffff',
+      previousValue: 'rgb(0, 0, 0)',
+    });
 
     const feedbackProgressResponse = await fetch(connection.url, {
       method: 'POST',

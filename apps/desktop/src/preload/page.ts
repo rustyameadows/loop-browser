@@ -5,9 +5,13 @@ import {
   PAGE_LOGIN_EVENT_CHANNEL,
   PAGE_PICKER_CONTROL_CHANNEL,
   PAGE_PICKER_EVENT_CHANNEL,
+  PAGE_STYLE_CONTROL_CHANNEL,
+  PAGE_STYLE_EVENT_CHANNEL,
   isPageAgentOverlayState,
   isPageLoginControl,
   isPagePickerControl,
+  isPageStyleControl,
+  type PickerIntent,
   type PageAgentOverlayState,
 } from '@agent-browser/protocol';
 import {
@@ -18,6 +22,7 @@ import {
   inferRole,
 } from '@agent-browser/selector';
 import { fillAgentLogin, hasVisibleLoginForm } from './page-login';
+import { PageStyleController } from './page-style';
 
 const OVERLAY_ROOT_ID = '__agent_browser_picker_overlay__';
 const AGENT_DONE_PULSE_MS = 1600;
@@ -35,6 +40,7 @@ const state: {
   enabled: boolean;
   hoveredElement: Element | null;
   overlay: OverlayElements | null;
+  pickerIntent: PickerIntent;
   lastPoint: { x: number; y: number } | null;
   animationFrame: number | null;
   agentOverlay: PageAgentOverlayState | null;
@@ -46,6 +52,7 @@ const state: {
   enabled: false,
   hoveredElement: null,
   overlay: null,
+  pickerIntent: 'feedback',
   lastPoint: null,
   animationFrame: null,
   agentOverlay: null,
@@ -54,6 +61,10 @@ const state: {
   loginFormAnimationFrame: null,
   loginFormObserver: null,
 };
+
+const styleController = new PageStyleController((payload) => {
+  ipcRenderer.send(PAGE_STYLE_EVENT_CHANNEL, payload);
+});
 
 const describeElement = (element: Element): { title: string; meta: string } => {
   const role = inferRole(element);
@@ -238,6 +249,11 @@ const renderPickerOverlay = (overlay: OverlayElements): boolean => {
     hidePickerOverlay();
     return false;
   }
+
+  overlay.pickerHint.textContent =
+    state.pickerIntent === 'style'
+      ? 'Click to inspect styles • Esc to cancel'
+      : 'Click to add feedback • Esc to cancel';
 
   const rect = state.hoveredElement.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) {
@@ -483,8 +499,9 @@ const disablePicker = (notifyCancelled: boolean): void => {
   }
 };
 
-const enablePicker = (): void => {
+const enablePicker = (intent: PickerIntent): void => {
   state.enabled = true;
+  state.pickerIntent = intent;
   state.hoveredElement = null;
   renderOverlay();
 };
@@ -633,6 +650,7 @@ window.addEventListener(
 
     ipcRenderer.send(PAGE_PICKER_EVENT_CHANNEL, {
       type: 'selection',
+      intent: state.pickerIntent,
       descriptor: createElementDescriptor(target),
     });
 
@@ -666,6 +684,7 @@ window.addEventListener('beforeunload', () => {
 
   state.loginFormObserver?.disconnect();
   state.loginFormObserver = null;
+  styleController.dispose();
 });
 
 ipcRenderer.on(PAGE_PICKER_CONTROL_CHANNEL, (_event, payload: unknown) => {
@@ -674,11 +693,19 @@ ipcRenderer.on(PAGE_PICKER_CONTROL_CHANNEL, (_event, payload: unknown) => {
   }
 
   if (payload.action === 'enable') {
-    enablePicker();
+    enablePicker(payload.intent);
     return;
   }
 
   disablePicker(false);
+});
+
+ipcRenderer.on(PAGE_STYLE_CONTROL_CHANNEL, (_event, payload: unknown) => {
+  if (!isPageStyleControl(payload)) {
+    return;
+  }
+
+  styleController.handleCommand(payload);
 });
 
 ipcRenderer.on(PAGE_LOGIN_CONTROL_CHANNEL, (_event, payload: unknown) => {

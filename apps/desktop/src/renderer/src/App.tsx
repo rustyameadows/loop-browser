@@ -9,6 +9,7 @@ import {
   createEmptyPickerState,
   createEmptyProjectAgentLoginState,
   createEmptySessionViewState,
+  createEmptyStyleViewState,
   type ChromeAppearanceCommand,
   type ChromeAppearanceState,
   type ElementDescriptor,
@@ -29,6 +30,8 @@ import {
   type SessionCommand,
   type SessionSummary,
   type SessionViewState,
+  type StyleViewCommand,
+  type StyleViewState,
 } from '@agent-browser/protocol';
 import {
   getChromeAppearanceCssVariables,
@@ -57,9 +60,10 @@ const emptyMarkdownState = createEmptyMarkdownViewState();
 const emptyMcpState = createEmptyMcpViewState();
 const emptyProjectAgentLoginState = createEmptyProjectAgentLoginState();
 const emptySessionState = createEmptySessionViewState();
+const emptyStyleState = createEmptyStyleViewState();
 const AGENT_DONE_PULSE_MS = 1600;
 
-type SurfaceMode = 'chrome' | 'launcher' | 'markdown' | 'mcp' | 'feedback' | 'project';
+type SurfaceMode = 'chrome' | 'launcher' | 'markdown' | 'mcp' | 'feedback' | 'project' | 'style';
 
 type IconName =
   | 'arrowUpRight'
@@ -95,6 +99,10 @@ const getSurfaceMode = (): SurfaceMode => {
     return 'project';
   }
 
+  if (params.get('surface') === 'style') {
+    return 'style';
+  }
+
   if (params.get('surface') === 'launcher') {
     return 'launcher';
   }
@@ -127,6 +135,100 @@ const getSelectionMeta = (selection: ElementDescriptor): string => {
   }
 
   return summaryParts.join(' | ');
+};
+
+type StyleControlDefinition = {
+  property: string;
+  label: string;
+  placeholder: string;
+  options?: string[];
+};
+
+const styleControlSections: Array<{
+  title: string;
+  controls: StyleControlDefinition[];
+}> = [
+  {
+    title: 'Color & Type',
+    controls: [
+      { property: 'color', label: 'Text color', placeholder: '#111111' },
+      { property: 'background-color', label: 'Background', placeholder: '#FFFFFF' },
+      { property: 'font-size', label: 'Font size', placeholder: '16px' },
+      {
+        property: 'font-weight',
+        label: 'Weight',
+        placeholder: '600',
+        options: ['400', '500', '600', '700', '800'],
+      },
+      { property: 'line-height', label: 'Line height', placeholder: '1.4' },
+      {
+        property: 'text-align',
+        label: 'Text align',
+        placeholder: 'center',
+        options: ['left', 'center', 'right', 'justify'],
+      },
+    ],
+  },
+  {
+    title: 'Spacing & Size',
+    controls: [
+      { property: 'margin-top', label: 'Margin top', placeholder: '12px' },
+      { property: 'margin-bottom', label: 'Margin bottom', placeholder: '12px' },
+      { property: 'padding-top', label: 'Padding top', placeholder: '12px' },
+      { property: 'padding-bottom', label: 'Padding bottom', placeholder: '12px' },
+      { property: 'width', label: 'Width', placeholder: '320px' },
+      { property: 'height', label: 'Height', placeholder: '48px' },
+    ],
+  },
+  {
+    title: 'Shape & Layout',
+    controls: [
+      { property: 'border-radius', label: 'Radius', placeholder: '12px' },
+      { property: 'border-width', label: 'Border width', placeholder: '1px' },
+      { property: 'border-color', label: 'Border color', placeholder: '#CBD5E1' },
+      { property: 'opacity', label: 'Opacity', placeholder: '0.9' },
+      {
+        property: 'display',
+        label: 'Display',
+        placeholder: 'flex',
+        options: ['block', 'inline-block', 'flex', 'grid', 'none'],
+      },
+      {
+        property: 'justify-content',
+        label: 'Justify',
+        placeholder: 'center',
+        options: ['flex-start', 'center', 'space-between', 'space-around'],
+      },
+      {
+        property: 'align-items',
+        label: 'Align items',
+        placeholder: 'center',
+        options: ['stretch', 'flex-start', 'center', 'flex-end'],
+      },
+    ],
+  },
+] as const;
+
+const styleDeclarationsToCssText = (declarations: Record<string, string>): string =>
+  Object.entries(declarations)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([property, value]) => `${property}: ${value};`)
+    .join('\n');
+
+const getStyleStatusText = (state: StyleViewState): string => {
+  switch (state.status) {
+    case 'loading':
+      return 'Inspecting styles and updating the live preview...';
+    case 'ready':
+      return state.previewStatus === 'applied'
+        ? 'Previewing live DOM overrides.'
+        : 'Inspection ready. Adjust properties to preview changes.';
+    case 'error':
+      return state.lastError ?? 'Style inspection failed.';
+    case 'idle':
+    default:
+      return 'Pick an element to inspect its styles.';
+  }
 };
 
 const getFeedbackStatusLabel = (status: FeedbackAnnotation['status']): string => {
@@ -696,6 +798,40 @@ const useMcpViewState = (): McpViewState => {
   return mcpViewState;
 };
 
+const useStyleViewState = (): StyleViewState => {
+  const [styleViewState, setStyleViewState] = useState<StyleViewState>(emptyStyleState);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const syncInitialStyleState = async (): Promise<void> => {
+      const initialState = await window.agentBrowser.getStyleViewState();
+      if (!isMounted) {
+        return;
+      }
+
+      setStyleViewState(initialState);
+    };
+
+    void syncInitialStyleState();
+
+    const unsubscribe = window.agentBrowser.subscribeStyleView((nextState) => {
+      if (!isMounted) {
+        return;
+      }
+
+      setStyleViewState(nextState);
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, []);
+
+  return styleViewState;
+};
+
 const useChromeAppearanceState = (): ChromeAppearanceState => {
   const [chromeAppearanceState, setChromeAppearanceState] =
     useState<ChromeAppearanceState>(emptyChromeAppearanceState);
@@ -1145,6 +1281,7 @@ const ChromeSurface = ({
   const feedbackState = useFeedbackState();
   const markdownViewState = useMarkdownViewState();
   const mcpViewState = useMcpViewState();
+  const styleViewState = useStyleViewState();
   const mcpPresence = useMcpPresence(mcpViewState);
   const [draftUrl, setDraftUrl] = useState('');
   const [isEditingAddress, setIsEditingAddress] = useState(false);
@@ -1176,6 +1313,10 @@ const ChromeSurface = ({
     await window.agentBrowser.executeMcpView(command);
   };
 
+  const runStyleCommand = async (command: StyleViewCommand): Promise<void> => {
+    await window.agentBrowser.executeStyleView(command);
+  };
+
   const runChromeAppearanceCommand = async (command: ChromeAppearanceCommand): Promise<void> => {
     await window.agentBrowser.executeChromeAppearance(command);
   };
@@ -1203,6 +1344,12 @@ const ChromeSurface = ({
   const agentLoginButtonTitle =
     navigationState.agentLoginCta.reason ??
     'Fill the detected login form with the configured agent login.';
+  const pickerIntent = styleViewState.isOpen ? 'style' : 'feedback';
+  const pickerButtonLabel = pickerState.enabled
+    ? 'Disable inspect mode'
+    : pickerIntent === 'style'
+      ? 'Pick an element for Style'
+      : 'Pick an element for Agent notes';
 
   return (
     <main className="shell">
@@ -1271,12 +1418,12 @@ const ChromeSurface = ({
 
           <div className="shell__toolbarActions">
             <button
-              aria-label={pickerState.enabled ? 'Disable inspect mode' : 'Enable inspect mode'}
+              aria-label={pickerButtonLabel}
               aria-pressed={pickerState.enabled}
               className={`shell__navButton shell__navButton--picker${
                 pickerState.enabled ? ' shell__navButton--pickerActive' : ''
               }`}
-              onClick={() => void runPickerCommand({ action: 'toggle' })}
+              onClick={() => void runPickerCommand({ action: 'toggle', intent: pickerIntent })}
               type="button"
             >
               <ChromeIcon className="shell__icon" name="crosshair" />
@@ -1312,6 +1459,21 @@ const ChromeSurface = ({
                 <ChromeIcon className="shell__icon" name="key" />
               </button>
             ) : null}
+            <button
+              aria-label={styleViewState.isOpen ? 'Close style panel' : 'Open style panel'}
+              aria-pressed={styleViewState.isOpen}
+              className={`shell__pillButton shell__pillButton--style${
+                styleViewState.isOpen ? ' shell__pillButton--styleActive' : ''
+              }`}
+              onClick={() =>
+                void runStyleCommand({
+                  action: styleViewState.isOpen ? 'close' : 'open',
+                })
+              }
+              type="button"
+            >
+              <span>Style</span>
+            </button>
             <button
               aria-label={
                 feedbackState.isOpen ? 'Close agent panel' : 'Open agent panel'
@@ -2504,6 +2666,323 @@ const ProjectSurface = ({
   );
 };
 
+const StyleSurface = (): JSX.Element => {
+  const styleViewState = useStyleViewState();
+  const feedbackState = useFeedbackState();
+  const [draftValues, setDraftValues] = useState<Record<string, string>>({});
+  const [rawCssDraft, setRawCssDraft] = useState('');
+
+  const linkedAnnotation =
+    feedbackState.annotations.find((annotation) => annotation.id === styleViewState.linkedAnnotationId) ??
+    null;
+  const visibleComputedValues = Object.entries(styleViewState.computedValues).filter(
+    ([, value]) => value.trim().length > 0,
+  );
+
+  useEffect(() => {
+    setDraftValues(styleViewState.overrideDeclarations);
+    setRawCssDraft(styleDeclarationsToCssText(styleViewState.overrideDeclarations));
+  }, [styleViewState.overrideDeclarations, styleViewState.selection]);
+
+  const runStyleCommand = async (command: StyleViewCommand): Promise<void> => {
+    await window.agentBrowser.executeStyleView(command);
+  };
+
+  const runPickerCommand = async (command: PickerCommand): Promise<void> => {
+    await window.agentBrowser.executePicker(command);
+  };
+
+  const runFeedbackCommand = async (command: FeedbackCommand): Promise<void> => {
+    await window.agentBrowser.executeFeedback(command);
+  };
+
+  const handleCommitProperty = async (property: string, value: string): Promise<void> => {
+    const nextValue = value.trim();
+    if (!nextValue) {
+      await runStyleCommand({ action: 'removeOverrideDeclaration', property });
+      return;
+    }
+
+    await runStyleCommand({
+      action: 'setOverrideDeclaration',
+      property,
+      value: nextValue,
+    });
+  };
+
+  const handleOpenThread = async (): Promise<void> => {
+    if (!linkedAnnotation) {
+      return;
+    }
+
+    await runFeedbackCommand({
+      action: 'selectAnnotation',
+      annotationId: linkedAnnotation.id,
+    });
+    await runFeedbackCommand({ action: 'open' });
+  };
+
+  const handleApplyRawCss = async (): Promise<void> => {
+    if (!rawCssDraft.trim()) {
+      await runStyleCommand({ action: 'clearPreview' });
+      return;
+    }
+
+    await runStyleCommand({
+      action: 'replaceOverridesFromRawCss',
+      rawCss: rawCssDraft,
+    });
+  };
+
+  return (
+    <main className="styleSurface">
+      <section className="styleSurface__panel">
+        <header className="styleSurface__header">
+          <div className="styleSurface__eyebrow">Visual Style Overrides</div>
+          <button
+            aria-label="Close style view"
+            className="styleSurface__iconButton"
+            onClick={() => void runStyleCommand({ action: 'close' })}
+            type="button"
+          >
+            <ChromeIcon className="shell__icon" name="close" />
+          </button>
+        </header>
+
+        <section className="styleSurface__hero">
+          <div>
+            <div className="styleSurface__title">Preview CSS tweaks directly on the page.</div>
+            <div className="styleSurface__subtitle">
+              Pick an element, inspect the rules Loop Browser can read, then adjust overrides that
+              get handed off to the agent as one shared style thread.
+            </div>
+          </div>
+          <div className="styleSurface__heroActions">
+            <button
+              className="shell__pillButton"
+              onClick={() => void runPickerCommand({ action: 'enable', intent: 'style' })}
+              type="button"
+            >
+              Pick Element
+            </button>
+            {linkedAnnotation ? (
+              <button
+                className="shell__pillButton shell__pillButton--muted"
+                onClick={() => void handleOpenThread()}
+                type="button"
+              >
+                Open Agent Thread
+              </button>
+            ) : null}
+          </div>
+        </section>
+
+        <div
+          className={`styleSurface__status${
+            styleViewState.status === 'error' ? ' styleSurface__status--error' : ''
+          }`}
+        >
+          {getStyleStatusText(styleViewState)}
+        </div>
+
+        {styleViewState.selection ? (
+          <div className="styleSurface__body">
+            <section className="styleSurface__section">
+              <div className="styleSurface__sectionHeader">
+                <div className="styleSurface__sectionTitle">Selected element</div>
+                <div className="styleSurface__sectionMeta">
+                  {styleViewState.previewStatus === 'applied' ? 'Preview active' : 'Inspection only'}
+                </div>
+              </div>
+
+              <div className="styleSurface__selectionCard">
+                <div className="styleSurface__selectionTitle">
+                  {getSelectionHeading(styleViewState.selection)}
+                </div>
+                <div className="styleSurface__selectionMeta">
+                  {getSelectionMeta(styleViewState.selection)}
+                </div>
+              </div>
+
+              {linkedAnnotation ? (
+                <div className="styleSurface__annotationMeta">
+                  Agent thread: {getFeedbackStatusLabel(linkedAnnotation.status)} •{' '}
+                  {linkedAnnotation.styleTweaks.length} tweak
+                  {linkedAnnotation.styleTweaks.length === 1 ? '' : 's'}
+                </div>
+              ) : (
+                <div className="styleSurface__annotationMeta">
+                  Committed tweaks will create a shared style thread for the agent.
+                </div>
+              )}
+
+              <div className="styleSurface__actions">
+                <button
+                  className="shell__pillButton shell__pillButton--muted"
+                  onClick={() => void runStyleCommand({ action: 'refreshInspection' })}
+                  type="button"
+                >
+                  Refresh
+                </button>
+                <button
+                  className="shell__pillButton shell__pillButton--muted"
+                  onClick={() => void runStyleCommand({ action: 'clearPreview' })}
+                  type="button"
+                >
+                  Clear Preview
+                </button>
+              </div>
+            </section>
+
+            {styleControlSections.map((section) => (
+              <section className="styleSurface__section" key={section.title}>
+                <div className="styleSurface__sectionHeader">
+                  <div className="styleSurface__sectionTitle">{section.title}</div>
+                  <div className="styleSurface__sectionMeta">Blur text fields to commit changes</div>
+                </div>
+
+                <div className="styleSurface__fieldGrid">
+                  {section.controls.map((control) => {
+                    const value = draftValues[control.property] ?? styleViewState.overrideDeclarations[control.property] ?? '';
+                    const computedValue = styleViewState.computedValues[control.property] ?? 'Not reported';
+
+                    return (
+                      <label className="styleSurface__field" key={control.property}>
+                        <span className="styleSurface__fieldLabel">{control.label}</span>
+                        {control.options ? (
+                          <select
+                            className="styleSurface__select"
+                            onChange={(event) => {
+                              setDraftValues((current) => ({
+                                ...current,
+                                [control.property]: event.target.value,
+                              }));
+                              void handleCommitProperty(control.property, event.target.value);
+                            }}
+                            value={value}
+                          >
+                            <option value="">Use site value</option>
+                            {control.options.map((option) => (
+                              <option key={option} value={option}>
+                                {option}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            className="styleSurface__input"
+                            onBlur={() => void handleCommitProperty(control.property, value)}
+                            onChange={(event) =>
+                              setDraftValues((current) => ({
+                                ...current,
+                                [control.property]: event.target.value,
+                              }))
+                            }
+                            placeholder={control.placeholder}
+                            spellCheck={false}
+                            type="text"
+                            value={value}
+                          />
+                        )}
+                        <span className="styleSurface__fieldMeta">Site value: {computedValue}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
+
+            <section className="styleSurface__section">
+              <div className="styleSurface__sectionHeader">
+                <div className="styleSurface__sectionTitle">Raw CSS</div>
+                <div className="styleSurface__sectionMeta">Generated override block only</div>
+              </div>
+
+              <label className="styleSurface__field">
+                <span className="styleSurface__fieldLabel">Declarations</span>
+                <textarea
+                  className="styleSurface__textarea"
+                  onChange={(event) => setRawCssDraft(event.target.value)}
+                  placeholder="color: #111827;&#10;padding-top: 12px;"
+                  rows={6}
+                  value={rawCssDraft}
+                />
+              </label>
+
+              <div className="styleSurface__actions">
+                <button className="shell__pillButton" onClick={() => void handleApplyRawCss()} type="button">
+                  Apply CSS
+                </button>
+                <button
+                  className="shell__pillButton shell__pillButton--muted"
+                  onClick={() =>
+                    setRawCssDraft(styleDeclarationsToCssText(styleViewState.overrideDeclarations))
+                  }
+                  type="button"
+                >
+                  Revert Draft
+                </button>
+              </div>
+            </section>
+
+            <section className="styleSurface__section">
+              <div className="styleSurface__sectionHeader">
+                <div className="styleSurface__sectionTitle">Computed values</div>
+                <div className="styleSurface__sectionMeta">
+                  {visibleComputedValues.length} captured for this element
+                </div>
+              </div>
+
+              <div className="styleSurface__computedList">
+                {visibleComputedValues.map(([property, value]) => (
+                  <div className="styleSurface__computedRow" key={property}>
+                    <span className="styleSurface__computedLabel">{property}</span>
+                    <span className="styleSurface__computedValue">{value}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="styleSurface__section">
+              <div className="styleSurface__sectionHeader">
+                <div className="styleSurface__sectionTitle">Matched rules</div>
+                <div className="styleSurface__sectionMeta">
+                  {styleViewState.unreadableStylesheetWarning ?? `${styleViewState.matchedRules.length} readable matches`}
+                </div>
+              </div>
+
+              <div className="styleSurface__ruleList">
+                {styleViewState.matchedRules.length > 0 ? (
+                  styleViewState.matchedRules.map((rule, index) => (
+                    <article className="styleSurface__ruleCard" key={`${rule.selectorText}-${index}`}>
+                      <div className="styleSurface__ruleHeader">
+                        <span className="styleSurface__ruleSelector">{rule.selectorText}</span>
+                        <span className="styleSurface__ruleSource">{rule.sourceLabel}</span>
+                      </div>
+                      {rule.atRuleContext.length > 0 ? (
+                        <div className="styleSurface__ruleMeta">{rule.atRuleContext.join(' -> ')}</div>
+                      ) : null}
+                      <pre className="styleSurface__ruleBody">{rule.declarations}</pre>
+                    </article>
+                  ))
+                ) : (
+                  <div className="styleSurface__empty">
+                    Loop Browser could not read any matching author rules for this element.
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
+        ) : (
+          <div className="styleSurface__empty styleSurface__empty--hero">
+            Pick an element to inspect its CSS rules and preview overrides.
+          </div>
+        )}
+      </section>
+    </main>
+  );
+};
+
 const FeedbackSurface = (): JSX.Element => {
   const feedbackState = useFeedbackState();
   const navigationState = useNavigationState();
@@ -2897,6 +3376,10 @@ export const App = (): JSX.Element => {
 
   if (surfaceMode === 'mcp') {
     return <McpSurface />;
+  }
+
+  if (surfaceMode === 'style') {
+    return <StyleSurface />;
   }
 
   if (surfaceMode === 'project') {

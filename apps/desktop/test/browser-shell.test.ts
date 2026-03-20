@@ -8,9 +8,14 @@ import {
   createEmptyFeedbackState,
   createEmptyMarkdownViewState,
   createEmptyMcpViewState,
+  createEmptyPickerState,
   createEmptyProjectAgentLoginState,
+  createEmptyStyleViewState,
+  PAGE_PICKER_EVENT_CHANNEL,
+  type ElementDescriptor,
+  type StyleInspectionPayload,
 } from '@agent-browser/protocol';
-import { app, dialog, nativeImage } from 'electron';
+import { app, dialog, ipcMain, nativeImage } from 'electron';
 
 const createMockNativeImage = (width = 1, height = 1) => ({
   isEmpty: () => false,
@@ -223,21 +228,62 @@ type BrowserShellHarness = {
     };
   } | null;
   layoutViews: ReturnType<typeof vi.fn>;
+  sendFeedbackState: ReturnType<typeof vi.fn>;
   sendMarkdownViewState: ReturnType<typeof vi.fn>;
   sendMcpViewState: ReturnType<typeof vi.fn>;
+  sendStyleViewState: ReturnType<typeof vi.fn>;
+  sendChromeAppearanceState: ReturnType<typeof vi.fn>;
   syncMcpViewState: ReturnType<typeof vi.fn>;
   refreshMarkdownView: ReturnType<typeof vi.fn>;
+  ensureStylePanelMounted: ReturnType<typeof vi.fn>;
   ensureMcpPanelMounted: ReturnType<typeof vi.fn>;
   ensureMarkdownPanelMounted: ReturnType<typeof vi.fn>;
   pageView: ReturnType<typeof createFakePanelView> | null;
   feedbackState: ReturnType<typeof createEmptyFeedbackState>;
+  feedbackPanelMounted: boolean;
+  feedbackPanelView: ReturnType<typeof createFakePanelView> | null;
   markdownViewState: ReturnType<typeof createEmptyMarkdownViewState>;
   markdownPanelMounted: boolean;
   markdownPanelView: ReturnType<typeof createFakePanelView> | null;
   mcpViewState: ReturnType<typeof createEmptyMcpViewState>;
   mcpPanelMounted: boolean;
   mcpPanelView: ReturnType<typeof createFakePanelView> | null;
+  styleViewState: ReturnType<typeof createEmptyStyleViewState>;
+  stylePanelMounted: boolean;
+  stylePanelView: ReturnType<typeof createFakePanelView> | null;
+  chromeAppearanceState: ReturnType<typeof createEmptyChromeAppearanceState>;
+  projectPanelMounted: boolean;
+  projectPanelView: ReturnType<typeof createFakePanelView> | null;
+  pickerState: ReturnType<typeof createEmptyPickerState>;
 };
+
+const createSelection = (): ElementDescriptor => ({
+  selector: '#cta',
+  xpath: '//*[@id="cta"]',
+  tag: 'button',
+  id: 'cta',
+  classList: ['primary'],
+  role: 'button',
+  accessibleName: 'Launch',
+  playwrightLocator: "getByRole('button', { name: 'Launch' })",
+  textSnippet: 'Launch',
+  bbox: {
+    x: 8,
+    y: 12,
+    width: 120,
+    height: 32,
+    devicePixelRatio: 2,
+  },
+  attributes: {
+    role: 'button',
+    'data-testid': 'cta',
+  },
+  outerHTMLExcerpt: '<button id="cta">Launch</button>',
+  frame: {
+    url: 'https://example.com',
+    isMainFrame: true,
+  },
+});
 
 describe('BrowserShell', () => {
   beforeEach(() => {
@@ -403,6 +449,246 @@ describe('BrowserShell', () => {
     expect(shell.getMarkdownViewState().isOpen).toBe(true);
   });
 
+  it('keeps the style panel mutually exclusive with the other side panels', async () => {
+    const shell = new BrowserShell({
+      projectAppearance: createProjectAppearanceRuntime(),
+    });
+    const subject = shell as unknown as BrowserShellHarness;
+
+    subject.window = {
+      contentView: {
+        addChildView: vi.fn(),
+        removeChildView: vi.fn(),
+      },
+    };
+    subject.layoutViews = vi.fn();
+    subject.sendFeedbackState = vi.fn();
+    subject.sendMarkdownViewState = vi.fn();
+    subject.sendMcpViewState = vi.fn();
+    subject.sendStyleViewState = vi.fn();
+    subject.sendChromeAppearanceState = vi.fn();
+    subject.ensureStylePanelMounted = vi.fn(() => {
+      subject.stylePanelMounted = true;
+      subject.stylePanelView = createFakePanelView();
+    });
+
+    subject.feedbackState = {
+      ...createEmptyFeedbackState(),
+      isOpen: true,
+    };
+    subject.feedbackPanelMounted = true;
+    subject.feedbackPanelView = createFakePanelView();
+    subject.markdownViewState = {
+      ...createEmptyMarkdownViewState(),
+      isOpen: true,
+    };
+    subject.markdownPanelMounted = true;
+    subject.markdownPanelView = createFakePanelView();
+    subject.mcpViewState = {
+      ...createEmptyMcpViewState(),
+      isOpen: true,
+    };
+    subject.mcpPanelMounted = true;
+    subject.mcpPanelView = createFakePanelView();
+    subject.chromeAppearanceState = {
+      ...createEmptyChromeAppearanceState(),
+      projectRoot: '/tmp/project',
+      configPath: '/tmp/project/.loop-browser.json',
+      isOpen: true,
+    };
+    subject.projectPanelMounted = true;
+    subject.projectPanelView = createFakePanelView();
+
+    await shell.executeStyleViewCommand({ action: 'open' });
+
+    expect(shell.getStyleViewState().isOpen).toBe(true);
+    expect(shell.getFeedbackState().isOpen).toBe(false);
+    expect(shell.getMarkdownViewState().isOpen).toBe(false);
+    expect(shell.getMcpViewState().isOpen).toBe(false);
+    expect(shell.getChromeAppearanceState().isOpen).toBe(false);
+  });
+
+  it('routes style picker selections into style inspection instead of feedback draft creation', () => {
+    const shell = new BrowserShell({
+      projectAppearance: createProjectAppearanceRuntime(),
+    });
+    const subject = shell as unknown as BrowserShellHarness & {
+      startStyleInspection: ReturnType<typeof vi.fn>;
+      executeFeedbackCommand: ReturnType<typeof vi.fn>;
+    };
+    const pageView = createFakePanelView();
+    const selection = createSelection();
+
+    subject.pageView = pageView;
+    subject.startStyleInspection = vi.fn(async () => createEmptyStyleViewState());
+    subject.executeFeedbackCommand = vi.fn(async () => createEmptyFeedbackState());
+
+    const pickerListener = vi
+      .mocked(ipcMain.on)
+      .mock.calls.find(([channel]) => channel === PAGE_PICKER_EVENT_CHANNEL)?.[1];
+    expect(pickerListener).toBeTypeOf('function');
+
+    pickerListener?.(
+      { sender: { id: pageView.webContents.id } } as Parameters<NonNullable<typeof pickerListener>>[0],
+      {
+        type: 'selection',
+        intent: 'style',
+        descriptor: selection,
+      },
+    );
+
+    expect(subject.startStyleInspection).toHaveBeenCalledWith(selection);
+    expect(subject.executeFeedbackCommand).not.toHaveBeenCalled();
+    expect(shell.getPickerState()).toEqual({
+      enabled: false,
+      intent: 'style',
+      lastSelection: selection,
+    });
+  });
+
+  it('upserts a single style annotation as overrides accumulate on the same element', async () => {
+    const shell = new BrowserShell({
+      projectAppearance: createProjectAppearanceRuntime(),
+    });
+    const subject = shell as unknown as BrowserShellHarness & {
+      requestPageStyleInspection: ReturnType<typeof vi.fn>;
+    };
+    const selection = createSelection();
+    const pageView = createFakePanelView();
+
+    subject.pageView = pageView;
+    subject.sendStyleViewState = vi.fn();
+    subject.sendFeedbackState = vi.fn();
+    subject.styleViewState = {
+      ...createEmptyStyleViewState(),
+      isOpen: true,
+      status: 'ready',
+      selection,
+      computedValues: {
+        color: 'rgb(0, 0, 0)',
+        'background-color': 'rgb(255, 255, 255)',
+      },
+      overrideDeclarations: {},
+    };
+    subject.requestPageStyleInspection = vi.fn(
+      async (
+        command: { action: 'inspect'; selection: ElementDescriptor; declarations: Record<string, string> },
+      ): Promise<StyleInspectionPayload> => ({
+        selection: command.selection,
+        matchedRules: [],
+        computedValues: {
+          color: command.declarations.color ?? 'rgb(0, 0, 0)',
+          'background-color':
+            command.declarations['background-color'] ?? 'rgb(255, 255, 255)',
+        },
+        unreadableStylesheetCount: 0,
+        unreadableStylesheetWarning: null,
+        overrideDeclarations: command.declarations,
+        previewStatus: Object.keys(command.declarations).length > 0 ? 'applied' : 'idle',
+        lastError: null,
+      }),
+    );
+
+    await shell.executeStyleViewCommand({
+      action: 'setOverrideDeclaration',
+      property: 'color',
+      value: '#ffffff',
+    });
+
+    const firstAnnotationId = shell.getFeedbackState().annotations[0]?.id;
+    expect(firstAnnotationId).toBeTruthy();
+    expect(shell.getFeedbackState().annotations).toHaveLength(1);
+    expect(shell.getFeedbackState().annotations[0]).toMatchObject({
+      intent: 'style',
+      status: 'open',
+      styleTweaks: [
+        {
+          property: 'color',
+          value: '#ffffff',
+        },
+      ],
+    });
+
+    await shell.executeStyleViewCommand({
+      action: 'setOverrideDeclaration',
+      property: 'background-color',
+      value: '#000000',
+    });
+
+    const annotation = shell.getFeedbackState().annotations[0];
+    expect(shell.getFeedbackState().annotations).toHaveLength(1);
+    expect(annotation?.id).toBe(firstAnnotationId);
+    expect(annotation?.styleTweaks.map(({ property, value }) => [property, value])).toEqual([
+      ['background-color', '#000000'],
+      ['color', '#ffffff'],
+    ]);
+    expect(annotation?.note).toContain('Current overrides:');
+    expect(annotation?.note).toContain('- background-color: #000000');
+    expect(annotation?.note).toContain('- color: #ffffff');
+  });
+
+  it('resets style preview state on navigation while preserving the open panel and linked annotation', () => {
+    const shell = new BrowserShell({
+      projectAppearance: createProjectAppearanceRuntime(),
+    });
+    const subject = shell as unknown as BrowserShellHarness & {
+      resetPickerOnNavigation: () => void;
+      sendPickerState: ReturnType<typeof vi.fn>;
+    };
+    const selection = createSelection();
+    const pageView = createFakePanelView();
+
+    subject.pageView = pageView;
+    subject.sendPickerState = vi.fn();
+    subject.sendFeedbackState = vi.fn();
+    subject.sendStyleViewState = vi.fn();
+    subject.pickerState = {
+      enabled: true,
+      intent: 'style',
+      lastSelection: selection,
+    };
+    subject.feedbackState = {
+      ...createEmptyFeedbackState(),
+      draft: {
+        ...createEmptyFeedbackState().draft,
+        selection,
+        summary: 'Draft summary',
+        sourceUrl: 'https://example.com',
+        sourceTitle: 'Example Domain',
+      },
+    };
+    subject.styleViewState = {
+      ...createEmptyStyleViewState(),
+      isOpen: true,
+      status: 'ready',
+      selection,
+      computedValues: {
+        color: 'rgb(0, 0, 0)',
+      },
+      overrideDeclarations: {
+        color: '#ffffff',
+      },
+      previewStatus: 'applied',
+      linkedAnnotationId: 'annotation-style-1',
+    };
+
+    subject.resetPickerOnNavigation();
+
+    expect(pageView.webContents.send).toHaveBeenCalledWith('page-picker:control', {
+      action: 'disable',
+    });
+    expect(shell.getPickerState()).toEqual(createEmptyPickerState());
+    expect(shell.getFeedbackState().draft.selection).toBeNull();
+    expect(shell.getStyleViewState()).toMatchObject({
+      isOpen: true,
+      status: 'idle',
+      selection: null,
+      overrideDeclarations: {},
+      previewStatus: 'idle',
+      linkedAnnotationId: 'annotation-style-1',
+    });
+  });
+
   it('emits a page overlay payload for the active agent annotation on the current page', () => {
     const shell = new BrowserShell({
       projectAppearance: createProjectAppearanceRuntime(),
@@ -447,6 +733,8 @@ describe('BrowserShell', () => {
           note: 'Tighten the CTA.',
           kind: 'change',
           priority: 'medium',
+          intent: 'feedback',
+          styleTweaks: [],
           status: 'in_progress',
           createdAt: '2026-03-14T00:00:00.000Z',
           updatedAt: '2026-03-14T00:00:01.000Z',

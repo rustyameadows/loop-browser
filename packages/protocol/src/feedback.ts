@@ -1,4 +1,5 @@
-import type { ElementDescriptor } from './navigation';
+import { isElementDescriptor, type ElementDescriptor, type PickerIntent } from './navigation';
+import { isStyleTweak, type StyleTweak } from './style';
 
 export const FEEDBACK_COMMAND_CHANNEL = 'feedback:command';
 export const FEEDBACK_GET_STATE_CHANNEL = 'feedback:get-state';
@@ -33,6 +34,8 @@ export interface FeedbackDraft {
   note: string;
   kind: FeedbackKind;
   priority: FeedbackPriority;
+  intent: PickerIntent;
+  styleTweaks: StyleTweak[];
   sourceUrl: string;
   sourceTitle: string;
 }
@@ -44,6 +47,8 @@ export interface FeedbackAnnotation {
   note: string;
   kind: FeedbackKind;
   priority: FeedbackPriority;
+  intent: PickerIntent;
+  styleTweaks: StyleTweak[];
   status: FeedbackStatus;
   createdAt: string;
   updatedAt: string;
@@ -67,6 +72,8 @@ export type FeedbackCommand =
   | {
       action: 'startDraftFromSelection';
       selection: ElementDescriptor;
+      intent?: PickerIntent;
+      styleTweaks?: StyleTweak[];
       sourceUrl?: string;
       sourceTitle?: string;
     }
@@ -76,6 +83,8 @@ export type FeedbackCommand =
       note?: string;
       kind?: FeedbackKind;
       priority?: FeedbackPriority;
+      intent?: PickerIntent;
+      styleTweaks?: StyleTweak[];
     }
   | {
       action: 'submitDraft';
@@ -99,12 +108,17 @@ export type FeedbackCommand =
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
+const isPickerIntent = (value: unknown): value is PickerIntent =>
+  value === 'feedback' || value === 'style';
+
 export const createEmptyFeedbackDraft = (): FeedbackDraft => ({
   selection: null,
   summary: '',
   note: '',
   kind: 'bug',
   priority: 'medium',
+  intent: 'feedback',
+  styleTweaks: [],
   sourceUrl: '',
   sourceTitle: '',
 });
@@ -148,11 +162,14 @@ export const isFeedbackDraft = (value: unknown): value is FeedbackDraft => {
   }
 
   return (
-    (value.selection === null || isRecord(value.selection)) &&
+    (value.selection === null || isElementDescriptor(value.selection)) &&
     typeof value.summary === 'string' &&
     typeof value.note === 'string' &&
     isFeedbackKind(value.kind) &&
     isFeedbackPriority(value.priority) &&
+    isPickerIntent(value.intent) &&
+    Array.isArray(value.styleTweaks) &&
+    value.styleTweaks.every(isStyleTweak) &&
     typeof value.sourceUrl === 'string' &&
     typeof value.sourceTitle === 'string'
   );
@@ -165,11 +182,14 @@ export const isFeedbackAnnotation = (value: unknown): value is FeedbackAnnotatio
 
   return (
     typeof value.id === 'string' &&
-    isRecord(value.selection) &&
+    isElementDescriptor(value.selection) &&
     typeof value.summary === 'string' &&
     typeof value.note === 'string' &&
     isFeedbackKind(value.kind) &&
     isFeedbackPriority(value.priority) &&
+    isPickerIntent(value.intent) &&
+    Array.isArray(value.styleTweaks) &&
+    value.styleTweaks.every(isStyleTweak) &&
     isFeedbackStatus(value.status) &&
     typeof value.createdAt === 'string' &&
     typeof value.updatedAt === 'string' &&
@@ -208,13 +228,23 @@ export const isFeedbackCommand = (value: unknown): value is FeedbackCommand => {
     case 'submitDraft':
       return true;
     case 'startDraftFromSelection':
-      return isRecord(value.selection);
+      return (
+        isElementDescriptor(value.selection) &&
+        (!('intent' in value) || value.intent === undefined || isPickerIntent(value.intent)) &&
+        (!('styleTweaks' in value) ||
+          value.styleTweaks === undefined ||
+          (Array.isArray(value.styleTweaks) && value.styleTweaks.every(isStyleTweak)))
+      );
     case 'updateDraft':
       return (
         (!('summary' in value) || typeof value.summary === 'string') &&
         (!('note' in value) || typeof value.note === 'string') &&
         (!('kind' in value) || isFeedbackKind(value.kind)) &&
-        (!('priority' in value) || isFeedbackPriority(value.priority))
+        (!('priority' in value) || isFeedbackPriority(value.priority)) &&
+        (!('intent' in value) || value.intent === undefined || isPickerIntent(value.intent)) &&
+        (!('styleTweaks' in value) ||
+          value.styleTweaks === undefined ||
+          (Array.isArray(value.styleTweaks) && value.styleTweaks.every(isStyleTweak)))
       );
     case 'selectAnnotation':
       return typeof value.annotationId === 'string' || value.annotationId === null;

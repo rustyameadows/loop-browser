@@ -26,6 +26,9 @@ import {
   SESSION_COMMAND_CHANNEL,
   SESSION_GET_STATE_CHANNEL,
   SESSION_STATE_CHANNEL,
+  STYLE_VIEW_COMMAND_CHANNEL,
+  STYLE_VIEW_GET_STATE_CHANNEL,
+  STYLE_VIEW_STATE_CHANNEL,
   type ChromeAppearanceCommand,
   type ChromeAppearanceState,
   type FeedbackCommand,
@@ -38,6 +41,8 @@ import {
   type NavigationCommand,
   type SessionCommand,
   type SessionViewState,
+  type StyleViewCommand,
+  type StyleViewState,
   type PickerCommand,
   type PickerState,
   type NavigationState,
@@ -127,6 +132,22 @@ const navigationBridge: NavigationBridge = {
     ipcRenderer.on(MCP_VIEW_STATE_CHANNEL, wrapped);
     return () => {
       ipcRenderer.removeListener(MCP_VIEW_STATE_CHANNEL, wrapped);
+    };
+  },
+  executeStyleView(command: StyleViewCommand): Promise<StyleViewState> {
+    return ipcRenderer.invoke(STYLE_VIEW_COMMAND_CHANNEL, command) as Promise<StyleViewState>;
+  },
+  getStyleViewState(): Promise<StyleViewState> {
+    return ipcRenderer.invoke(STYLE_VIEW_GET_STATE_CHANNEL) as Promise<StyleViewState>;
+  },
+  subscribeStyleView(listener: (state: StyleViewState) => void): () => void {
+    const wrapped = (_event: Electron.IpcRendererEvent, state: StyleViewState): void => {
+      listener(state);
+    };
+
+    ipcRenderer.on(STYLE_VIEW_STATE_CHANNEL, wrapped);
+    return () => {
+      ipcRenderer.removeListener(STYLE_VIEW_STATE_CHANNEL, wrapped);
     };
   },
   executeChromeAppearance(command: ChromeAppearanceCommand): Promise<ChromeAppearanceState> {

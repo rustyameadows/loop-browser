@@ -4,5 +4,6 @@ export * from './agent-login';
 export * from './markdown';
 export * from './mcp';
 export * from './feedback';
+export * from './style';
 export * from './tools';
 export * from './session';

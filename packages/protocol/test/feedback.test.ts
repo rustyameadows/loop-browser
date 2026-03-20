@@ -38,6 +38,14 @@ describe('feedback protocol guards', () => {
       isFeedbackCommand({
         action: 'startDraftFromSelection',
         selection: sampleSelection,
+        intent: 'style',
+        styleTweaks: [
+          {
+            property: 'color',
+            value: '#112233',
+            previousValue: 'rgb(12, 34, 56)',
+          },
+        ],
       }),
     ).toBe(true);
     expect(
@@ -56,6 +64,14 @@ describe('feedback protocol guards', () => {
           ...createEmptyFeedbackState().draft,
           selection: sampleSelection,
           summary: 'Button copy is unclear',
+          intent: 'style',
+          styleTweaks: [
+            {
+              property: 'color',
+              value: '#112233',
+              previousValue: 'rgb(12, 34, 56)',
+            },
+          ],
         },
       }),
     ).toBe(true);

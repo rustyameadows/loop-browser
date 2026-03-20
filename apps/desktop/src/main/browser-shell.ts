@@ -42,6 +42,8 @@ import {
   PAGE_AGENT_OVERLAY_CHANNEL,
   PAGE_PICKER_CONTROL_CHANNEL,
   PAGE_PICKER_EVENT_CHANNEL,
+  PAGE_STYLE_CONTROL_CHANNEL,
+  PAGE_STYLE_EVENT_CHANNEL,
   PICKER_COMMAND_CHANNEL,
   PICKER_GET_STATE_CHANNEL,
   PICKER_STATE_CHANNEL,
@@ -52,6 +54,9 @@ import {
   SESSION_COMMAND_CHANNEL,
   SESSION_GET_STATE_CHANNEL,
   SESSION_STATE_CHANNEL,
+  STYLE_VIEW_COMMAND_CHANNEL,
+  STYLE_VIEW_GET_STATE_CHANNEL,
+  STYLE_VIEW_STATE_CHANNEL,
   createEmptyProjectAgentLoginState,
   createEmptyFeedbackDraft,
   createEmptyFeedbackState,
@@ -60,16 +65,19 @@ import {
   createEmptyNavigationState,
   createEmptyPickerState,
   createEmptySessionViewState,
+  createEmptyStyleViewState,
   isFeedbackCommand,
   isChromeAppearanceCommand,
   isMcpViewCommand,
   isMarkdownViewCommand,
   isNavigationCommand,
+  isPageStyleEvent,
   isProjectAgentLoginSaveRequest,
   isPagePickerEvent,
   isPageLoginEvent,
   isPickerCommand,
   isSessionCommand,
+  isStyleViewCommand,
   type ChromeAppearanceCommand,
   type ChromeAppearanceState,
   type FeedbackAnnotation,
@@ -82,6 +90,12 @@ import {
   type MarkdownViewState,
   type PageScrollRequest,
   type PageScrollResult,
+  type PageStyleControl,
+  type PageStyleEvent,
+  type StyleInspectionPayload,
+  type StyleTweak,
+  type StyleViewCommand,
+  type StyleViewState,
   type NavigationCommand,
   type NavigationState,
   type AgentLoginCtaState,
@@ -129,9 +143,16 @@ const LAUNCHER_WINDOW_HEIGHT = 520;
 const LAUNCHER_WINDOW_MIN_WIDTH = 420;
 const LAUNCHER_WINDOW_MIN_HEIGHT = 420;
 
-type TrustedSurface = 'chrome' | 'launcher' | 'markdown' | 'mcp' | 'feedback' | 'project';
+type TrustedSurface =
+  | 'chrome'
+  | 'launcher'
+  | 'markdown'
+  | 'mcp'
+  | 'feedback'
+  | 'project'
+  | 'style';
 
-type SidePanelKind = 'markdown' | 'mcp' | 'feedback' | 'project';
+type SidePanelKind = 'markdown' | 'mcp' | 'feedback' | 'project' | 'style';
 
 type PageMarkupSnapshot = {
   html: string;
@@ -179,10 +200,12 @@ export class BrowserShell {
   private mcpPanelView: WebContentsView | null = null;
   private feedbackPanelView: WebContentsView | null = null;
   private projectPanelView: WebContentsView | null = null;
+  private stylePanelView: WebContentsView | null = null;
   private markdownPanelMounted = false;
   private mcpPanelMounted = false;
   private feedbackPanelMounted = false;
   private projectPanelMounted = false;
+  private stylePanelMounted = false;
   private lastError: string | null = null;
   private hasVisibleLoginForm = false;
   private pickerState: PickerState = createEmptyPickerState();
@@ -190,10 +213,18 @@ export class BrowserShell {
   private feedbackState: FeedbackState = createEmptyFeedbackState();
   private markdownViewState: MarkdownViewState = createEmptyMarkdownViewState();
   private mcpViewState: McpViewState = createEmptyMcpViewState();
+  private styleViewState: StyleViewState = createEmptyStyleViewState();
   private chromeAppearanceState: ChromeAppearanceState = createEmptyChromeAppearanceState();
   private projectAgentLoginState: ProjectAgentLoginState =
     createEmptyProjectAgentLoginState();
   private markdownRequestId = 0;
+  private readonly pendingStyleRequests = new Map<
+    string,
+    {
+      resolve: (inspection: StyleInspectionPayload) => void;
+      reject: (error: Error) => void;
+    }
+  >();
   private mcpDiagnosticsSource: McpDiagnosticsSource | null = null;
   private mcpDiagnosticsUnsubscribe: (() => void) | null = null;
   private readonly projectAppearance: ProjectAppearanceRuntime;
@@ -332,6 +363,8 @@ export class BrowserShell {
     ipcMain.removeHandler(MARKDOWN_VIEW_GET_STATE_CHANNEL);
     ipcMain.removeHandler(MCP_VIEW_COMMAND_CHANNEL);
     ipcMain.removeHandler(MCP_VIEW_GET_STATE_CHANNEL);
+    ipcMain.removeHandler(STYLE_VIEW_COMMAND_CHANNEL);
+    ipcMain.removeHandler(STYLE_VIEW_GET_STATE_CHANNEL);
     ipcMain.removeHandler(CHROME_APPEARANCE_COMMAND_CHANNEL);
     ipcMain.removeHandler(CHROME_APPEARANCE_GET_STATE_CHANNEL);
     ipcMain.removeHandler(PROJECT_AGENT_LOGIN_GET_STATE_CHANNEL);
@@ -341,6 +374,7 @@ export class BrowserShell {
     ipcMain.removeHandler(FEEDBACK_GET_STATE_CHANNEL);
     ipcMain.removeAllListeners(PAGE_PICKER_EVENT_CHANNEL);
     ipcMain.removeAllListeners(PAGE_LOGIN_EVENT_CHANNEL);
+    ipcMain.removeAllListeners(PAGE_STYLE_EVENT_CHANNEL);
     this.mcpDiagnosticsUnsubscribe?.();
     this.mcpDiagnosticsUnsubscribe = null;
     this.projectAppearanceUnsubscribe();
@@ -456,6 +490,7 @@ export class BrowserShell {
   getPickerState(): PickerState {
     return {
       enabled: this.pickerState.enabled,
+      intent: this.pickerState.intent,
       lastSelection: this.pickerState.lastSelection,
     };
   }
@@ -475,6 +510,19 @@ export class BrowserShell {
       recentRequests: this.mcpViewState.recentRequests.map((entry) => ({ ...entry })),
       agentActivity: this.mcpViewState.agentActivity ? { ...this.mcpViewState.agentActivity } : null,
       lastSelfTest: { ...this.mcpViewState.lastSelfTest },
+    };
+  }
+
+  getStyleViewState(): StyleViewState {
+    return {
+      ...this.styleViewState,
+      selection: this.styleViewState.selection ? { ...this.styleViewState.selection } : null,
+      matchedRules: this.styleViewState.matchedRules.map((rule) => ({
+        ...rule,
+        atRuleContext: [...rule.atRuleContext],
+      })),
+      computedValues: { ...this.styleViewState.computedValues },
+      overrideDeclarations: { ...this.styleViewState.overrideDeclarations },
     };
   }
 
@@ -501,10 +549,12 @@ export class BrowserShell {
         selection: this.feedbackState.draft.selection
           ? { ...this.feedbackState.draft.selection }
           : null,
+        styleTweaks: this.feedbackState.draft.styleTweaks.map((entry) => ({ ...entry })),
       },
       annotations: this.feedbackState.annotations.map((annotation) => ({
         ...annotation,
         selection: { ...annotation.selection },
+        styleTweaks: annotation.styleTweaks.map((entry) => ({ ...entry })),
         replies: annotation.replies.map((reply) => ({ ...reply })),
       })),
     };
@@ -626,17 +676,24 @@ export class BrowserShell {
       throw new Error('Page view is not ready.');
     }
 
+    const nextIntent = command.intent ?? this.pickerState.intent;
+
     switch (command.action) {
       case 'enable':
         this.pickerState = {
           enabled: true,
+          intent: nextIntent,
           lastSelection: null,
         };
-        this.pageView.webContents.send(PAGE_PICKER_CONTROL_CHANNEL, { action: 'enable' });
+        this.pageView.webContents.send(PAGE_PICKER_CONTROL_CHANNEL, {
+          action: 'enable',
+          intent: nextIntent,
+        });
         break;
       case 'disable':
         this.pickerState = {
           enabled: false,
+          intent: nextIntent,
           lastSelection: this.pickerState.lastSelection,
         };
         this.pageView.webContents.send(PAGE_PICKER_CONTROL_CHANNEL, { action: 'disable' });
@@ -644,10 +701,12 @@ export class BrowserShell {
       case 'toggle':
         return this.executePickerCommand({
           action: this.pickerState.enabled ? 'disable' : 'enable',
+          intent: nextIntent,
         });
       case 'clearSelection':
         this.pickerState = {
           enabled: this.pickerState.enabled,
+          intent: nextIntent,
           lastSelection: null,
         };
         break;
@@ -704,6 +763,31 @@ export class BrowserShell {
         }
       default:
         return this.getMcpViewState();
+    }
+  }
+
+  async executeStyleViewCommand(command: StyleViewCommand): Promise<StyleViewState> {
+    switch (command.action) {
+      case 'open':
+        return this.openStylePanel();
+      case 'close':
+        return this.closeStylePanel();
+      case 'toggle':
+        return this.styleViewState.isOpen ? this.closeStylePanel() : this.openStylePanel();
+      case 'startInspectionFromSelection':
+        return this.startStyleInspection(command.selection);
+      case 'refreshInspection':
+        return this.refreshStyleInspection();
+      case 'setOverrideDeclaration':
+        return this.setStyleOverrideDeclaration(command.property, command.value);
+      case 'removeOverrideDeclaration':
+        return this.removeStyleOverrideDeclaration(command.property);
+      case 'replaceOverridesFromRawCss':
+        return this.replaceStyleOverridesFromRawCss(command.rawCss);
+      case 'clearPreview':
+        return this.clearStylePreview();
+      default:
+        return this.getStyleViewState();
     }
   }
 
@@ -779,6 +863,7 @@ export class BrowserShell {
       case 'startDraftFromSelection':
         this.closeMarkdownPanel(false);
         this.closeMcpPanel(false);
+        this.closeStylePanel(false);
         this.feedbackState = {
           ...this.feedbackState,
           isOpen: true,
@@ -788,6 +873,8 @@ export class BrowserShell {
             note: '',
             kind: 'bug',
             priority: 'medium',
+            intent: command.intent ?? 'feedback',
+            styleTweaks: command.styleTweaks ? command.styleTweaks.map((entry) => ({ ...entry })) : [],
             sourceUrl: command.sourceUrl ?? this.createNavigationState().url,
             sourceTitle: command.sourceTitle ?? this.createNavigationState().title,
           },
@@ -813,6 +900,10 @@ export class BrowserShell {
               typeof command.note === 'string' ? command.note : this.feedbackState.draft.note,
             kind: command.kind ?? this.feedbackState.draft.kind,
             priority: command.priority ?? this.feedbackState.draft.priority,
+            intent: command.intent ?? this.feedbackState.draft.intent,
+            styleTweaks:
+              command.styleTweaks?.map((entry) => ({ ...entry })) ??
+              this.feedbackState.draft.styleTweaks,
           },
           lastUpdatedAt: new Date().toISOString(),
         };
@@ -1013,6 +1104,24 @@ export class BrowserShell {
     });
 
     ipcMain.handle(
+      STYLE_VIEW_COMMAND_CHANNEL,
+      async (event: IpcMainInvokeEvent, payload: unknown): Promise<StyleViewState> => {
+        this.assertTrustedSender(event);
+
+        if (!isStyleViewCommand(payload)) {
+          throw new Error('Invalid style view command payload.');
+        }
+
+        return this.executeStyleViewCommand(payload);
+      },
+    );
+
+    ipcMain.handle(STYLE_VIEW_GET_STATE_CHANNEL, async (event: IpcMainInvokeEvent) => {
+      this.assertTrustedSender(event);
+      return this.getStyleViewState();
+    });
+
+    ipcMain.handle(
       CHROME_APPEARANCE_COMMAND_CHANNEL,
       async (event: IpcMainInvokeEvent, payload: unknown): Promise<ChromeAppearanceState> => {
         this.assertTrustedSender(event);
@@ -1097,19 +1206,26 @@ export class BrowserShell {
       if (payload.type === 'cancelled') {
         this.pickerState = {
           enabled: false,
+          intent: this.pickerState.intent,
           lastSelection: this.pickerState.lastSelection,
         };
       } else {
         this.pickerState = {
           enabled: false,
+          intent: payload.intent,
           lastSelection: payload.descriptor,
         };
-        void this.executeFeedbackCommand({
-          action: 'startDraftFromSelection',
-          selection: payload.descriptor,
-          sourceUrl: this.createNavigationState().url,
-          sourceTitle: this.createNavigationState().title,
-        });
+        if (payload.intent === 'style') {
+          void this.startStyleInspection(payload.descriptor);
+        } else {
+          void this.executeFeedbackCommand({
+            action: 'startDraftFromSelection',
+            selection: payload.descriptor,
+            intent: 'feedback',
+            sourceUrl: this.createNavigationState().url,
+            sourceTitle: this.createNavigationState().title,
+          });
+        }
       }
 
       this.sendPickerState();
@@ -1131,6 +1247,42 @@ export class BrowserShell {
       this.hasVisibleLoginForm = payload.hasVisibleLoginForm;
       this.sendNavigationState();
     });
+
+    ipcMain.on(PAGE_STYLE_EVENT_CHANNEL, (event: IpcMainEvent, payload: unknown) => {
+      if (!this.pageView || event.sender.id !== this.pageView.webContents.id) {
+        return;
+      }
+
+      if (!isPageStyleEvent(payload)) {
+        return;
+      }
+
+      if (payload.type === 'selectionLost') {
+        this.styleViewState = {
+          ...createEmptyStyleViewState(),
+          isOpen: this.styleViewState.isOpen,
+          status: 'error',
+          linkedAnnotationId: this.styleViewState.linkedAnnotationId,
+          lastError: payload.message,
+          previewStatus: 'error',
+        };
+        this.sendStyleViewState();
+        return;
+      }
+
+      const pending = this.pendingStyleRequests.get(payload.requestId);
+      if (!pending) {
+        return;
+      }
+
+      this.pendingStyleRequests.delete(payload.requestId);
+      if (payload.type === 'error') {
+        pending.reject(new Error(payload.message));
+        return;
+      }
+
+      pending.resolve(payload.inspection);
+    });
   }
 
   private assertChromeSender(event: IpcMainInvokeEvent): void {
@@ -1146,6 +1298,7 @@ export class BrowserShell {
       this.mcpPanelView?.webContents.id,
       this.projectPanelView?.webContents.id,
       this.feedbackPanelView?.webContents.id,
+      this.stylePanelView?.webContents.id,
     ].filter((value): value is number => typeof value === 'number');
 
     if (!trustedIds.includes(event.sender.id)) {
@@ -1276,6 +1429,7 @@ export class BrowserShell {
       this.sendFeedbackState();
       this.sendMarkdownViewState();
       this.sendMcpViewState();
+      this.sendStyleViewState();
       this.sendChromeAppearanceState();
     });
 
@@ -1334,6 +1488,7 @@ export class BrowserShell {
         this.markdownPanelView,
         this.mcpPanelView,
         this.projectPanelView,
+        this.stylePanelView,
       ]) {
         if (!panelView) {
           continue;
@@ -1360,6 +1515,8 @@ export class BrowserShell {
           ? this.mcpPanelView
           : activeSidePanel === 'project'
             ? this.projectPanelView
+            : activeSidePanel === 'style'
+              ? this.stylePanelView
           : null;
 
     this.uiView.setBounds({
@@ -1410,7 +1567,13 @@ export class BrowserShell {
       height: contentHeight,
     });
 
-    for (const panelView of [this.feedbackPanelView, this.markdownPanelView, this.mcpPanelView]) {
+    for (const panelView of [
+      this.feedbackPanelView,
+      this.markdownPanelView,
+      this.mcpPanelView,
+      this.stylePanelView,
+      this.projectPanelView,
+    ]) {
       if (!panelView) {
         continue;
       }
@@ -1906,6 +2069,407 @@ export class BrowserShell {
     return Math.min(Math.max(Math.round(value), 1), 100);
   }
 
+  private async requestPageStyleInspection(
+    command: Omit<PageStyleControl, 'requestId'>,
+  ): Promise<StyleInspectionPayload> {
+    if (!this.pageView || this.pageView.webContents.isDestroyed()) {
+      throw new Error('Page view is not ready.');
+    }
+
+    const requestId = randomUUID();
+    return new Promise<StyleInspectionPayload>((resolve, reject) => {
+      this.pendingStyleRequests.set(requestId, { resolve, reject });
+      this.pageView?.webContents.send(PAGE_STYLE_CONTROL_CHANNEL, {
+        ...command,
+        requestId,
+      });
+    });
+  }
+
+  private rejectPendingStyleRequests(message: string): void {
+    for (const [requestId, pending] of this.pendingStyleRequests.entries()) {
+      pending.reject(new Error(message));
+      this.pendingStyleRequests.delete(requestId);
+    }
+  }
+
+  private buildStyleAnnotationSummary(selection: FeedbackAnnotation['selection']): string {
+    const primary =
+      selection.accessibleName || selection.textSnippet || selection.playwrightLocator || selection.selector;
+    const descriptor = selection.role || selection.tag;
+    return `Style tweak: ${descriptor} ${primary}`.slice(0, 120);
+  }
+
+  private buildStyleTweaks(
+    declarations: Record<string, string>,
+    previousComputedValues: Record<string, string>,
+  ): StyleTweak[] {
+    return Object.entries(declarations)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([property, value]) => ({
+        property,
+        value,
+        previousValue: previousComputedValues[property] ?? '',
+      }));
+  }
+
+  private buildStyleAnnotationNote(
+    selection: FeedbackAnnotation['selection'],
+    styleTweaks: StyleTweak[],
+  ): string {
+    const heading = this.buildStyleAnnotationSummary(selection);
+    const detailLines = styleTweaks.map((entry) =>
+      entry.previousValue
+        ? `- ${entry.property}: ${entry.value} (was ${entry.previousValue})`
+        : `- ${entry.property}: ${entry.value}`,
+    );
+
+    return [
+      heading,
+      `Selector: ${selection.playwrightLocator || selection.selector}`,
+      `Frame: ${selection.frame.url || 'current page'}`,
+      '',
+      'Current overrides:',
+      ...detailLines,
+    ].join('\n');
+  }
+
+  private isUnresolvedStyleStatus(status: FeedbackAnnotation['status']): boolean {
+    return status === 'open' || status === 'acknowledged' || status === 'in_progress';
+  }
+
+  private isSameStyleTarget(
+    annotation: FeedbackAnnotation,
+    selection: FeedbackAnnotation['selection'],
+    pageUrl: string,
+  ): boolean {
+    if (annotation.intent !== 'style' || annotation.url !== pageUrl) {
+      return false;
+    }
+
+    if (annotation.selection.frame.url !== selection.frame.url) {
+      return false;
+    }
+
+    return this.isSameSelection(annotation.selection, selection);
+  }
+
+  private isSameSelection(
+    left: FeedbackAnnotation['selection'],
+    right: FeedbackAnnotation['selection'],
+  ): boolean {
+    return (
+      left.selector === right.selector ||
+      (left.xpath !== null && right.xpath !== null && left.xpath === right.xpath)
+    );
+  }
+
+  private findStyleAnnotation(
+    selection: FeedbackAnnotation['selection'],
+    unresolvedOnly = false,
+  ): FeedbackAnnotation | null {
+    const pageUrl = this.createNavigationState().url;
+    return (
+      this.feedbackState.annotations.find((annotation) => {
+        if (!this.isSameStyleTarget(annotation, selection, pageUrl)) {
+          return false;
+        }
+
+        return !unresolvedOnly || this.isUnresolvedStyleStatus(annotation.status);
+      }) ?? null
+    );
+  }
+
+  private upsertStyleAnnotation(
+    selection: FeedbackAnnotation['selection'],
+    declarations: Record<string, string>,
+    previousComputedValues: Record<string, string>,
+  ): string | null {
+    if (Object.keys(declarations).length === 0) {
+      return this.findStyleAnnotation(selection)?.id ?? this.styleViewState.linkedAnnotationId;
+    }
+
+    const styleTweaks = this.buildStyleTweaks(declarations, previousComputedValues);
+    const timestamp = new Date().toISOString();
+    const pageUrl = this.createNavigationState().url;
+    const pageTitle = this.createNavigationState().title;
+    const summary = this.buildStyleAnnotationSummary(selection);
+    const note = this.buildStyleAnnotationNote(selection, styleTweaks);
+    const existing = this.findStyleAnnotation(selection, true);
+
+    if (existing) {
+      this.feedbackState = {
+        ...this.feedbackState,
+        annotations: this.feedbackState.annotations.map((annotation) =>
+          annotation.id === existing.id
+            ? {
+                ...annotation,
+                selection,
+                summary,
+                note,
+                kind: 'change',
+                priority: annotation.priority,
+                intent: 'style',
+                styleTweaks,
+                updatedAt: timestamp,
+                url: pageUrl,
+                pageTitle,
+              }
+            : annotation,
+        ),
+        activeAnnotationId: existing.id,
+        lastUpdatedAt: timestamp,
+      };
+      return existing.id;
+    }
+
+    const annotation: FeedbackAnnotation = {
+      id: randomUUID(),
+      selection,
+      summary,
+      note,
+      kind: 'change',
+      priority: 'medium',
+      intent: 'style',
+      styleTweaks,
+      status: 'open',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      url: pageUrl,
+      pageTitle,
+      replies: [],
+    };
+
+    this.feedbackState = {
+      ...this.feedbackState,
+      annotations: [annotation, ...this.feedbackState.annotations],
+      activeAnnotationId: annotation.id,
+      lastUpdatedAt: timestamp,
+    };
+    return annotation.id;
+  }
+
+  private applyStyleInspectionResult(
+    inspection: StyleInspectionPayload,
+    linkedAnnotationId: string | null,
+  ): StyleViewState {
+    this.styleViewState = {
+      isOpen: this.styleViewState.isOpen,
+      status: 'ready',
+      selection: inspection.selection,
+      matchedRules: inspection.matchedRules.map((entry) => ({
+        ...entry,
+        atRuleContext: [...entry.atRuleContext],
+      })),
+      computedValues: { ...inspection.computedValues },
+      unreadableStylesheetCount: inspection.unreadableStylesheetCount,
+      unreadableStylesheetWarning: inspection.unreadableStylesheetWarning,
+      overrideDeclarations: { ...inspection.overrideDeclarations },
+      previewStatus: inspection.previewStatus,
+      linkedAnnotationId,
+      lastError: inspection.lastError,
+    };
+    return this.getStyleViewState();
+  }
+
+  private setStyleViewError(message: string): StyleViewState {
+    this.styleViewState = {
+      ...this.styleViewState,
+      status: 'error',
+      previewStatus: 'error',
+      lastError: message,
+    };
+    this.sendStyleViewState();
+    return this.getStyleViewState();
+  }
+
+  private async startStyleInspection(
+    selection: FeedbackAnnotation['selection'],
+    notify = true,
+  ): Promise<StyleViewState> {
+    const declarations =
+      this.styleViewState.selection && this.isSameSelection(this.styleViewState.selection, selection)
+        ? this.styleViewState.overrideDeclarations
+        : {};
+    this.styleViewState = {
+      ...this.styleViewState,
+      status: 'loading',
+      selection,
+      lastError: null,
+    };
+    if (notify) {
+      this.sendStyleViewState();
+    }
+
+    try {
+      const inspection = await this.requestPageStyleInspection({
+        action: 'inspect',
+        selection,
+        declarations,
+      } as Omit<PageStyleControl, 'requestId'>);
+      const linkedAnnotationId = this.findStyleAnnotation(selection)?.id ?? null;
+      const nextState = this.applyStyleInspectionResult(inspection, linkedAnnotationId);
+      this.sendStyleViewState();
+      return nextState;
+    } catch (error) {
+      return this.setStyleViewError(
+        error instanceof Error ? error.message : 'Could not inspect the selected element.',
+      );
+    }
+  }
+
+  private async refreshStyleInspection(): Promise<StyleViewState> {
+    if (!this.styleViewState.selection) {
+      return this.setStyleViewError('Pick an element before refreshing style inspection.');
+    }
+
+    return this.startStyleInspection(this.styleViewState.selection);
+  }
+
+  private async setStyleOverrideDeclaration(
+    property: string,
+    value: string,
+  ): Promise<StyleViewState> {
+    if (!this.styleViewState.selection) {
+      return this.setStyleViewError('Pick an element before adjusting styles.');
+    }
+
+    const nextDeclarations = {
+      ...this.styleViewState.overrideDeclarations,
+      [property.trim().toLowerCase()]: value.trim(),
+    };
+    const previousComputedValues = { ...this.styleViewState.computedValues };
+    this.styleViewState = {
+      ...this.styleViewState,
+      status: 'loading',
+      lastError: null,
+    };
+    this.sendStyleViewState();
+
+    try {
+      const inspection = await this.requestPageStyleInspection({
+        action: 'inspect',
+        selection: this.styleViewState.selection,
+        declarations: nextDeclarations,
+      } as Omit<PageStyleControl, 'requestId'>);
+      const linkedAnnotationId = this.upsertStyleAnnotation(
+        inspection.selection,
+        inspection.overrideDeclarations,
+        previousComputedValues,
+      );
+      const nextState = this.applyStyleInspectionResult(inspection, linkedAnnotationId);
+      this.sendFeedbackState();
+      this.sendStyleViewState();
+      return nextState;
+    } catch (error) {
+      return this.setStyleViewError(
+        error instanceof Error ? error.message : 'Could not apply that style override.',
+      );
+    }
+  }
+
+  private async removeStyleOverrideDeclaration(property: string): Promise<StyleViewState> {
+    if (!this.styleViewState.selection) {
+      return this.setStyleViewError('Pick an element before adjusting styles.');
+    }
+
+    const nextDeclarations = { ...this.styleViewState.overrideDeclarations };
+    delete nextDeclarations[property.trim().toLowerCase()];
+    const previousComputedValues = { ...this.styleViewState.computedValues };
+    this.styleViewState = {
+      ...this.styleViewState,
+      status: 'loading',
+      lastError: null,
+    };
+    this.sendStyleViewState();
+
+    try {
+      const inspection = await this.requestPageStyleInspection({
+        action: 'inspect',
+        selection: this.styleViewState.selection,
+        declarations: nextDeclarations,
+      } as Omit<PageStyleControl, 'requestId'>);
+      const linkedAnnotationId = this.upsertStyleAnnotation(
+        inspection.selection,
+        inspection.overrideDeclarations,
+        previousComputedValues,
+      );
+      const nextState = this.applyStyleInspectionResult(inspection, linkedAnnotationId);
+      this.sendFeedbackState();
+      this.sendStyleViewState();
+      return nextState;
+    } catch (error) {
+      return this.setStyleViewError(
+        error instanceof Error ? error.message : 'Could not remove that style override.',
+      );
+    }
+  }
+
+  private async replaceStyleOverridesFromRawCss(rawCss: string): Promise<StyleViewState> {
+    if (!this.styleViewState.selection) {
+      return this.setStyleViewError('Pick an element before adjusting styles.');
+    }
+
+    const previousComputedValues = { ...this.styleViewState.computedValues };
+    this.styleViewState = {
+      ...this.styleViewState,
+      status: 'loading',
+      lastError: null,
+    };
+    this.sendStyleViewState();
+
+    try {
+      const inspection = await this.requestPageStyleInspection({
+        action: 'replaceOverridesFromRawCss',
+        selection: this.styleViewState.selection,
+        rawCss,
+      } as Omit<PageStyleControl, 'requestId'>);
+      const linkedAnnotationId = this.upsertStyleAnnotation(
+        inspection.selection,
+        inspection.overrideDeclarations,
+        previousComputedValues,
+      );
+      const nextState = this.applyStyleInspectionResult(inspection, linkedAnnotationId);
+      this.sendFeedbackState();
+      this.sendStyleViewState();
+      return nextState;
+    } catch (error) {
+      return this.setStyleViewError(
+        error instanceof Error ? error.message : 'Could not apply those CSS declarations.',
+      );
+    }
+  }
+
+  private async clearStylePreview(): Promise<StyleViewState> {
+    if (!this.styleViewState.selection) {
+      return this.setStyleViewError('Pick an element before clearing preview.');
+    }
+
+    this.styleViewState = {
+      ...this.styleViewState,
+      status: 'loading',
+      lastError: null,
+    };
+    this.sendStyleViewState();
+
+    try {
+      const inspection = await this.requestPageStyleInspection({
+        action: 'clearPreview',
+        selection: this.styleViewState.selection,
+      });
+      const nextState = this.applyStyleInspectionResult(
+        inspection,
+        this.styleViewState.linkedAnnotationId,
+      );
+      this.sendStyleViewState();
+      return nextState;
+    } catch (error) {
+      return this.setStyleViewError(
+        error instanceof Error ? error.message : 'Could not clear the live style preview.',
+      );
+    }
+  }
+
   private buildDraftSummary(selection: FeedbackState['draft']['selection']): string {
     if (!selection) {
       return '';
@@ -1942,6 +2506,8 @@ export class BrowserShell {
       note,
       kind: this.feedbackState.draft.kind,
       priority: this.feedbackState.draft.priority,
+      intent: this.feedbackState.draft.intent,
+      styleTweaks: this.feedbackState.draft.styleTweaks.map((entry) => ({ ...entry })),
       status: 'open',
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -1964,6 +2530,7 @@ export class BrowserShell {
     this.closeMarkdownPanel(false);
     this.closeMcpPanel(false);
     this.closeProjectPanel(false);
+    this.closeStylePanel(false);
     this.ensureFeedbackPanelMounted();
     this.feedbackState = {
       ...this.feedbackState,
@@ -1971,6 +2538,7 @@ export class BrowserShell {
       lastUpdatedAt: new Date().toISOString(),
     };
     this.layoutViews();
+    this.sendStyleViewState();
     this.sendMarkdownViewState();
     this.sendMcpViewState();
     this.sendChromeAppearanceState();
@@ -2011,8 +2579,66 @@ export class BrowserShell {
     }
   }
 
+  private async openStylePanel(): Promise<StyleViewState> {
+    this.closeFeedbackPanel(false);
+    this.closeMarkdownPanel(false);
+    this.closeMcpPanel(false);
+    this.closeProjectPanel(false);
+    this.ensureStylePanelMounted();
+    this.styleViewState = {
+      ...this.styleViewState,
+      isOpen: true,
+    };
+    this.layoutViews();
+    this.sendFeedbackState();
+    this.sendStyleViewState();
+    this.sendMarkdownViewState();
+    this.sendMcpViewState();
+    this.sendChromeAppearanceState();
+
+    if (this.pickerState.lastSelection) {
+      return this.startStyleInspection(this.pickerState.lastSelection, false);
+    }
+
+    this.sendStyleViewState();
+    return this.getStyleViewState();
+  }
+
+  private closeStylePanel(notify = true): StyleViewState {
+    if (this.window && this.stylePanelView && this.stylePanelMounted) {
+      this.window.contentView.removeChildView(this.stylePanelView);
+      this.stylePanelMounted = false;
+    }
+
+    this.styleViewState = {
+      ...this.styleViewState,
+      isOpen: false,
+    };
+    this.layoutViews();
+    if (notify) {
+      this.sendStyleViewState();
+    }
+    return this.getStyleViewState();
+  }
+
+  private ensureStylePanelMounted(): void {
+    if (!this.window) {
+      throw new Error('Window is not ready.');
+    }
+
+    if (!this.stylePanelView) {
+      this.stylePanelView = this.createTrustedView('style');
+    }
+
+    if (!this.stylePanelMounted) {
+      this.window.contentView.addChildView(this.stylePanelView);
+      this.stylePanelMounted = true;
+    }
+  }
+
   private async openMarkdownPanel(): Promise<MarkdownViewState> {
     this.closeFeedbackPanel(false);
+    this.closeStylePanel(false);
     this.closeMcpPanel(false);
     this.closeProjectPanel(false);
     this.ensureMarkdownPanelMounted();
@@ -2026,6 +2652,7 @@ export class BrowserShell {
     this.layoutViews();
     this.sendFeedbackState();
     this.sendMcpViewState();
+    this.sendStyleViewState();
     this.sendChromeAppearanceState();
     this.sendMarkdownViewState();
 
@@ -2066,6 +2693,7 @@ export class BrowserShell {
 
   private openMcpPanel(): McpViewState {
     this.closeFeedbackPanel(false);
+    this.closeStylePanel(false);
     this.closeMarkdownPanel(false);
     this.closeProjectPanel(false);
     this.ensureMcpPanelMounted();
@@ -2077,6 +2705,7 @@ export class BrowserShell {
     this.layoutViews();
     this.sendFeedbackState();
     this.sendMarkdownViewState();
+    this.sendStyleViewState();
     this.sendMcpViewState();
     return this.getMcpViewState();
   }
@@ -2115,6 +2744,7 @@ export class BrowserShell {
 
   private openProjectPanel(): ChromeAppearanceState {
     this.closeFeedbackPanel(false);
+    this.closeStylePanel(false);
     this.closeMarkdownPanel(false);
     this.closeMcpPanel(false);
     this.ensureProjectPanelMounted();
@@ -2126,6 +2756,7 @@ export class BrowserShell {
     this.sendFeedbackState();
     this.sendMarkdownViewState();
     this.sendMcpViewState();
+    this.sendStyleViewState();
     this.sendChromeAppearanceState();
     return this.getChromeAppearanceState();
   }
@@ -2445,6 +3076,10 @@ export class BrowserShell {
       return 'feedback';
     }
 
+    if (this.styleViewState.isOpen && this.stylePanelView && this.stylePanelMounted) {
+      return 'style';
+    }
+
     if (this.mcpViewState.isOpen && this.mcpPanelView && this.mcpPanelMounted) {
       return 'mcp';
     }
@@ -2713,6 +3348,14 @@ export class BrowserShell {
       };
       this.sendFeedbackState();
     }
+
+    this.rejectPendingStyleRequests('Style inspection reset after navigation.');
+    this.styleViewState = {
+      ...createEmptyStyleViewState(),
+      isOpen: this.styleViewState.isOpen,
+      linkedAnnotationId: this.styleViewState.linkedAnnotationId,
+    };
+    this.sendStyleViewState();
   }
 
   private invalidateMarkdownCache(): void {
@@ -2787,6 +3430,10 @@ export class BrowserShell {
     this.sendPageAgentOverlay();
   }
 
+  private sendStyleViewState(): void {
+    this.sendToTrustedViews(STYLE_VIEW_STATE_CHANNEL, this.getStyleViewState());
+  }
+
   private sendChromeAppearanceState(): void {
     this.sendToTrustedViews(CHROME_APPEARANCE_STATE_CHANNEL, this.getChromeAppearanceState());
   }
@@ -2810,6 +3457,7 @@ export class BrowserShell {
       this.markdownPanelView,
       this.mcpPanelView,
       this.projectPanelView,
+      this.stylePanelView,
     ]) {
       if (!view || view.webContents.isDestroyed()) {
         continue;
@@ -2820,22 +3468,26 @@ export class BrowserShell {
   }
 
   private destroyWindow(): void {
+    this.rejectPendingStyleRequests('Loop Browser closed the current window.');
     this.closeManagedView(this.feedbackPanelView);
     this.closeManagedView(this.mcpPanelView);
     this.closeManagedView(this.projectPanelView);
     this.closeManagedView(this.markdownPanelView);
+    this.closeManagedView(this.stylePanelView);
     this.closeManagedView(this.pageView);
     this.closeManagedView(this.uiView);
     this.feedbackPanelView = null;
     this.mcpPanelView = null;
     this.projectPanelView = null;
     this.markdownPanelView = null;
+    this.stylePanelView = null;
     this.pageView = null;
     this.uiView = null;
     this.feedbackPanelMounted = false;
     this.mcpPanelMounted = false;
     this.projectPanelMounted = false;
     this.markdownPanelMounted = false;
+    this.stylePanelMounted = false;
     this.window = null;
   }
 

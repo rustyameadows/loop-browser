@@ -37,10 +37,11 @@ const sampleDescriptor = {
 
 describe('picker protocol guards', () => {
   it('accepts valid picker commands and states', () => {
-    expect(isPickerCommand({ action: 'toggle' })).toBe(true);
+    expect(isPickerCommand({ action: 'toggle', intent: 'style' })).toBe(true);
     expect(
       isPickerState({
         enabled: true,
+        intent: 'feedback',
         lastSelection: sampleDescriptor,
       }),
     ).toBe(true);
@@ -51,6 +52,7 @@ describe('picker protocol guards', () => {
     expect(
       isPagePickerEvent({
         type: 'selection',
+        intent: 'style',
         descriptor: sampleDescriptor,
       }),
     ).toBe(true);

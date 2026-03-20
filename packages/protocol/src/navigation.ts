@@ -2,6 +2,7 @@ import type { McpAgentActivityPhase, McpViewCommand, McpViewState } from './mcp'
 import type { MarkdownViewCommand, MarkdownViewState } from './markdown';
 import type { FeedbackCommand, FeedbackState } from './feedback';
 import type { ChromeAppearanceCommand, ChromeAppearanceState } from './appearance';
+import type { StyleViewCommand, StyleViewState } from './style';
 import type {
   ProjectAgentLoginSaveRequest,
   ProjectAgentLoginState,
@@ -29,9 +30,11 @@ export const navigationActions = [
   'useAgentLogin',
 ] as const;
 export const pickerActions = ['enable', 'disable', 'toggle', 'clearSelection'] as const;
+export const pickerIntents = ['feedback', 'style'] as const;
 
 export type NavigationAction = (typeof navigationActions)[number];
 export type PickerAction = (typeof pickerActions)[number];
+export type PickerIntent = (typeof pickerIntents)[number];
 
 export type NavigationCommand =
   | {
@@ -73,16 +76,19 @@ export interface ElementDescriptor {
 
 export interface PickerState {
   enabled: boolean;
+  intent: PickerIntent;
   lastSelection: ElementDescriptor | null;
 }
 
 export type PickerCommand = {
   action: PickerAction;
+  intent?: PickerIntent;
 };
 
 export type PagePickerControl =
   | {
       action: 'enable';
+      intent: PickerIntent;
     }
   | {
       action: 'disable';
@@ -91,6 +97,7 @@ export type PagePickerControl =
 export type PagePickerEvent =
   | {
       type: 'selection';
+      intent: PickerIntent;
       descriptor: ElementDescriptor;
     }
   | {
@@ -149,6 +156,9 @@ export interface NavigationBridge {
   executeMcpView(command: McpViewCommand): Promise<McpViewState>;
   getMcpViewState(): Promise<McpViewState>;
   subscribeMcpView(listener: (state: McpViewState) => void): () => void;
+  executeStyleView(command: StyleViewCommand): Promise<StyleViewState>;
+  getStyleViewState(): Promise<StyleViewState>;
+  subscribeStyleView(listener: (state: StyleViewState) => void): () => void;
   executeChromeAppearance(command: ChromeAppearanceCommand): Promise<ChromeAppearanceState>;
   getChromeAppearanceState(): Promise<ChromeAppearanceState>;
   subscribeChromeAppearance(listener: (state: ChromeAppearanceState) => void): () => void;
@@ -181,6 +191,7 @@ export const createEmptyNavigationState = (): NavigationState => ({
 
 export const createEmptyPickerState = (): PickerState => ({
   enabled: false,
+  intent: 'feedback',
   lastSelection: null,
 });
 
@@ -261,7 +272,11 @@ export const isPickerCommand = (value: unknown): value is PickerCommand => {
     return false;
   }
 
-  return pickerActions.includes(value.action as PickerAction);
+  if (!pickerActions.includes(value.action as PickerAction)) {
+    return false;
+  }
+
+  return !('intent' in value) || value.intent === undefined || pickerIntents.includes(value.intent as PickerIntent);
 };
 
 export const isPickerState = (value: unknown): value is PickerState => {
@@ -271,6 +286,8 @@ export const isPickerState = (value: unknown): value is PickerState => {
 
   return (
     typeof value.enabled === 'boolean' &&
+    typeof value.intent === 'string' &&
+    pickerIntents.includes(value.intent as PickerIntent) &&
     (value.lastSelection === null || isElementDescriptor(value.lastSelection))
   );
 };
@@ -280,7 +297,11 @@ export const isPagePickerControl = (value: unknown): value is PagePickerControl 
     return false;
   }
 
-  return value.action === 'enable' || value.action === 'disable';
+  if (value.action === 'disable') {
+    return true;
+  }
+
+  return value.action === 'enable' && pickerIntents.includes(value.intent as PickerIntent);
 };
 
 export const isPagePickerEvent = (value: unknown): value is PagePickerEvent => {
@@ -292,7 +313,12 @@ export const isPagePickerEvent = (value: unknown): value is PagePickerEvent => {
     return true;
   }
 
-  return value.type === 'selection' && isElementDescriptor(value.descriptor);
+  return (
+    value.type === 'selection' &&
+    typeof value.intent === 'string' &&
+    pickerIntents.includes(value.intent as PickerIntent) &&
+    isElementDescriptor(value.descriptor)
+  );
 };
 
 export const isPageLoginControl = (value: unknown): value is PageLoginControl => {
