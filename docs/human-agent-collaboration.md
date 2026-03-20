@@ -42,6 +42,18 @@ The goal is to remove ambiguity, not add another comment system.
 9. The agent updates the status as the work moves from `open` to `acknowledged`, `in_progress`, or `resolved`.
 10. The human reviews the result in the page itself, not just the code diff.
 
+## Login-gated apps
+
+If the app under discussion has a login screen, set up the project before starting the normal feedback loop:
+
+1. Open the `Project Style` panel.
+2. Set `Default URL` to the local app origin and click `Save Startup`.
+3. Enter the repo-local `Agent login email or username` and `Agent login password`, then click `Save Login`.
+4. Navigate to the login page for that same origin.
+5. Click `Use Agent Login` to fill the visible username/password fields without submitting the form.
+
+The saved credentials live in `.loop-browser.local.json` in the project root and are intended to stay repo-local. The shareable `.loop-browser.json` file should keep only the non-secret project settings like `startup.defaultUrl`.
+
 ## Human workflow
 
 - Use picker-driven feedback whenever the request is about a specific element, section, or layout issue.

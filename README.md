@@ -19,6 +19,52 @@ The app opens a checked-in local fixture on first launch, so you can verify navi
 
 Plain web popups are opened externally instead of spawning in-app popup windows.
 
+## Project Startup And Login
+
+Loop Browser supports two project-level files for startup and login behavior:
+
+- `.loop-browser.json`
+  Checked in. Use this for shareable project settings like chrome colors, icon path, and the default startup URL.
+- `.loop-browser.local.json`
+  Repo-local. Use this for the actual agent login username and password. The app auto-adds this file to `.gitignore` when you save a login through the UI.
+
+Example `.loop-browser.json`:
+
+```json
+{
+  "version": 1,
+  "startup": {
+    "defaultUrl": "http://127.0.0.1:3000"
+  }
+}
+```
+
+Example `.loop-browser.local.json`:
+
+```json
+{
+  "version": 1,
+  "agentLogin": {
+    "username": "dev@example.com",
+    "password": "password123"
+  }
+}
+```
+
+In the Project panel:
+
+- Set `Default URL`, then click `Save Startup`.
+- Enter `Agent login email or username` and `Agent login password`, then click `Save Login`.
+- On matching login pages for that saved `Default URL` origin, the `Use Agent Login` button fills the visible login form without submitting it.
+
+Startup URL precedence is:
+
+1. `AGENT_BROWSER_START_URL`
+2. `startup.defaultUrl` from `.loop-browser.json`
+3. the built-in local fixture
+
+Legacy env-based login is still supported through `agentLogin.usernameEnv` and `agentLogin.passwordEnv` in `.loop-browser.json`, but repo-local saved login is now the preferred path.
+
 ## MCP Integration
 
 While the app is running, it starts a localhost JSON-RPC MCP server at `127.0.0.1`. On macOS, the registration manifest is written to:
