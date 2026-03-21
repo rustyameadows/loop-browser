@@ -1,0 +1,229 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		B00000000000000000000001 /* LoopBrowserNativeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000002 /* LoopBrowserNativeApp.swift */; };
+		B00000000000000000000003 /* LocalMCPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000004 /* LocalMCPServer.swift */; };
+		B00000000000000000000005 /* loop-browser-app-icon.icns in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000006 /* loop-browser-app-icon.icns */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		B00000000000000000000002 /* LoopBrowserNativeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopBrowserNativeApp.swift; sourceTree = "<group>"; };
+		B00000000000000000000004 /* LocalMCPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalMCPServer.swift; sourceTree = "<group>"; };
+		B00000000000000000000006 /* loop-browser-app-icon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; name = "loop-browser-app-icon.icns"; path = ../desktop/static/mac/loop-browser-app-icon.icns; sourceTree = SOURCE_ROOT; };
+		B00000000000000000000007 /* LoopBrowserNative.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LoopBrowserNative.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		B00000000000000000000008 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		B00000000000000000000009 = {
+			isa = PBXGroup;
+			children = (
+				B0000000000000000000000A /* LoopBrowserNative */,
+				B0000000000000000000000B /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		B0000000000000000000000A /* LoopBrowserNative */ = {
+			isa = PBXGroup;
+			children = (
+				B00000000000000000000002 /* LoopBrowserNativeApp.swift */,
+				B00000000000000000000004 /* LocalMCPServer.swift */,
+				B00000000000000000000006 /* loop-browser-app-icon.icns */,
+			);
+			path = LoopBrowserNative;
+			sourceTree = "<group>";
+		};
+		B0000000000000000000000B /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B00000000000000000000007 /* LoopBrowserNative.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		B0000000000000000000000C /* LoopBrowserNative */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B0000000000000000000000D /* Build configuration list for PBXNativeTarget "LoopBrowserNative" */;
+			buildPhases = (
+				B0000000000000000000000E /* Sources */,
+				B00000000000000000000008 /* Frameworks */,
+				B0000000000000000000000F /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = LoopBrowserNative;
+			productName = LoopBrowserNative;
+			productReference = B00000000000000000000007 /* LoopBrowserNative.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		B00000000000000000000010 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2600;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					B0000000000000000000000C = {
+						CreatedOnToolsVersion = 26.3;
+					};
+				};
+			};
+			buildConfigurationList = B00000000000000000000011 /* Build configuration list for PBXProject "LoopBrowserNative" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = B00000000000000000000009;
+			productRefGroup = B0000000000000000000000B /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				B0000000000000000000000C /* LoopBrowserNative */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		B0000000000000000000000F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000005 /* loop-browser-app-icon.icns in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		B0000000000000000000000E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000001 /* LoopBrowserNativeApp.swift in Sources */,
+				B00000000000000000000003 /* LocalMCPServer.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		B00000000000000000000012 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				COPY_PHASE_STRIP = NO;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		B00000000000000000000013 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				COPY_PHASE_STRIP = NO;
+				ENABLE_HARDENED_RUNTIME = NO;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		B00000000000000000000014 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Loop Browser";
+				INFOPLIST_KEY_CFBundleIconFile = "loop-browser-app-icon.icns";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.loopbrowser.LoopBrowserNative;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		B00000000000000000000015 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Loop Browser";
+				INFOPLIST_KEY_CFBundleIconFile = "loop-browser-app-icon.icns";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.loopbrowser.LoopBrowserNative;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		B00000000000000000000011 /* Build configuration list for PBXProject "LoopBrowserNative" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B00000000000000000000012 /* Debug */,
+				B00000000000000000000013 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B0000000000000000000000D /* Build configuration list for PBXNativeTarget "LoopBrowserNative" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B00000000000000000000014 /* Debug */,
+				B00000000000000000000015 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = B00000000000000000000010 /* Project object */;
+}
