@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>FormatVersion</key>
+	<integer>1</integer>
+	<key>Store</key>
+	<dict>
+		<key>LoopBrowserNativeTests</key>
+		<dict>
+			<key>CanvasInputRouterTests</key>
+			<dict>
+				<key>testCanvasInteractionViewPassesViewportContentThrough</key>
+				<dict>
+					<key>mrnet</key>
+					<real>0.00060296058654785156</real>
+				</dict>
+				<key>testCanvasInteractionViewUsesFlippedCoordinates</key>
+				<dict>
+					<key>mrnet</key>
+					<real>0.00031709671020507812</real>
+				</dict>
+				<key>testEmptyCanvasMouseDownClearsSelectionAndPans</key>
+				<dict>
+					<key>mrnet</key>
+					<real>0.00033104419708251953</real>
+				</dict>
+				<key>testHeaderDragUsesGrabOffsetWithoutJumping</key>
+				<dict>
+					<key>mrnet</key>
+					<real>0.00033009052276611328</real>
+				</dict>
+				<key>testMagnifyOnEmptyCanvasRoutesToZoomOnly</key>
+				<dict>
+					<key>mrnet</key>
+					<real>0.00029194355010986328</real>
+				</dict>
+				<key>testResizeHandleDragUsesSharedResizeMath</key>
+				<dict>
+					<key>mrnet</key>
+					<real>0.00029599666595458984</real>
+				</dict>
+				<key>testScrollOnEmptyCanvasRoutesToPanOnly</key>
+				<dict>
+					<key>mrnet</key>
+					<real>0.0079150199890136719</real>
+				</dict>
+			</dict>
+		</dict>
+	</dict>
+</dict>
+</plist>

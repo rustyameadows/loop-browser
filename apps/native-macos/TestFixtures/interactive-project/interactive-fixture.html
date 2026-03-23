@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Loop Interactive Fixture</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      body {
+        margin: 0;
+        min-height: 160vh;
+        background:
+          radial-gradient(circle at top left, rgba(10, 132, 255, 0.16), transparent 28%),
+          linear-gradient(180deg, #f7fafc, #eef3f9);
+        color: #0f1720;
+      }
+
+      main {
+        max-width: 880px;
+        margin: 0 auto;
+        padding: 56px 32px 120px;
+      }
+
+      .card {
+        background: rgba(255, 255, 255, 0.86);
+        border: 1px solid rgba(15, 23, 32, 0.08);
+        border-radius: 24px;
+        box-shadow: 0 24px 60px rgba(15, 23, 32, 0.12);
+        padding: 28px;
+        backdrop-filter: blur(14px);
+      }
+
+      .stack {
+        display: grid;
+        gap: 18px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 2.2rem;
+        line-height: 1.05;
+      }
+
+      p {
+        margin: 0;
+        line-height: 1.55;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      button {
+        appearance: none;
+        border: 0;
+        border-radius: 999px;
+        background: #0a84ff;
+        color: white;
+        padding: 12px 18px;
+        cursor: pointer;
+      }
+
+      input {
+        width: 100%;
+        max-width: 420px;
+        border: 1px solid rgba(15, 23, 32, 0.16);
+        border-radius: 14px;
+        padding: 12px 14px;
+        background: rgba(255, 255, 255, 0.94);
+      }
+
+      .counter {
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="card stack">
+        <div class="stack">
+          <p id="fixture-subtitle">Interactive fixture for native Loop Browser UI tests.</p>
+          <h1 id="fixture-title">Loop Interactive Fixture</h1>
+          <p>
+            This page is intentionally simple and deterministic so the native macOS app can prove
+            viewport click, typing, drag, resize, and canvas-pan behavior against a real
+            <code>WKWebView</code>.
+          </p>
+        </div>
+
+        <div class="stack">
+          <button id="increment-button" type="button" aria-label="Increment Counter">Increment Counter</button>
+          <p id="counter-value" class="counter">Counter: 0</p>
+        </div>
+
+        <div class="stack">
+          <label for="fixture-input">Fixture Input</label>
+          <input
+            id="fixture-input"
+            aria-label="Fixture Input"
+            placeholder="Type into the viewport"
+            type="text"
+          />
+        </div>
+      </section>
+    </main>
+
+    <script>
+      (() => {
+        const params = new URLSearchParams(window.location.search);
+        const title = params.get("title") || "Loop Interactive Fixture";
+        const subtitle = params.get("subtitle") || "Interactive fixture for native Loop Browser UI tests.";
+
+        document.title = title;
+        document.getElementById("fixture-title").textContent = title;
+        document.getElementById("fixture-subtitle").textContent = subtitle;
+
+        let count = 0;
+        const counter = document.getElementById("counter-value");
+        document.getElementById("increment-button").addEventListener("click", () => {
+          count += 1;
+          counter.textContent = `Counter: ${count}`;
+        });
+      })();
+    </script>
+  </body>
+</html>

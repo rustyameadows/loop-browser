@@ -1,0 +1,9 @@
+{
+  "chrome": {
+    "accentColor": "#0A84FF",
+    "chromeColor": "#FAFBFD",
+    "projectIconPath": null
+  },
+  "startup": null,
+  "version": 1
+}

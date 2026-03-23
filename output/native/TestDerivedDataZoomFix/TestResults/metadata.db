@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>FormatVersion</key>
+	<integer>1</integer>
+	<key>Store</key>
+	<dict>
+		<key>LoopBrowserNativeUITests</key>
+		<dict>
+			<key>LoopBrowserNativeUITests</key>
+			<dict>
+				<key>testRepeatedZoomCommandsRemainResponsive</key>
+				<dict>
+					<key>mrnet</key>
+					<real>18.697869062423706</real>
+				</dict>
+				<key>testToolbarZoomCommandsChangeCanvasPresentation</key>
+				<dict>
+					<key>mrnet</key>
+					<real>9.0822869539260864</real>
+				</dict>
+			</dict>
+		</dict>
+	</dict>
+</dict>
+</plist>

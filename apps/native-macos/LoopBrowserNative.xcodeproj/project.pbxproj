@@ -7,20 +7,59 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B00000000000000000000016 /* CanvasGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000017 /* CanvasGeometry.swift */; };
 		B00000000000000000000001 /* LoopBrowserNativeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000002 /* LoopBrowserNativeApp.swift */; };
 		B00000000000000000000003 /* LocalMCPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000004 /* LocalMCPServer.swift */; };
 		B00000000000000000000005 /* loop-browser-app-icon.icns in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000006 /* loop-browser-app-icon.icns */; };
+		B00000000000000000000018 /* CanvasInputRouterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000001A /* CanvasInputRouterTests.swift */; };
+		B00000000000000000000019 /* LoopBrowserNativeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000001C /* LoopBrowserNativeUITests.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		B00000000000000000000026 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B00000000000000000000010 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B0000000000000000000000C;
+			remoteInfo = LoopBrowserNative;
+		};
+		B00000000000000000000027 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B00000000000000000000010 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B0000000000000000000000C;
+			remoteInfo = LoopBrowserNative;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
+		B00000000000000000000017 /* CanvasGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CanvasGeometry.swift; path = LoopBrowserNativeSupport/Sources/LoopBrowserNativeSupport/CanvasGeometry.swift; sourceTree = SOURCE_ROOT; };
 		B00000000000000000000002 /* LoopBrowserNativeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopBrowserNativeApp.swift; sourceTree = "<group>"; };
 		B00000000000000000000004 /* LocalMCPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalMCPServer.swift; sourceTree = "<group>"; };
 		B00000000000000000000006 /* loop-browser-app-icon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; name = "loop-browser-app-icon.icns"; path = ../desktop/static/mac/loop-browser-app-icon.icns; sourceTree = SOURCE_ROOT; };
 		B00000000000000000000007 /* LoopBrowserNative.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LoopBrowserNative.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B0000000000000000000001A /* CanvasInputRouterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasInputRouterTests.swift; sourceTree = "<group>"; };
+		B0000000000000000000001B /* LoopBrowserNativeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LoopBrowserNativeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B0000000000000000000001C /* LoopBrowserNativeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopBrowserNativeUITests.swift; sourceTree = "<group>"; };
+		B0000000000000000000001D /* LoopBrowserNativeUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LoopBrowserNativeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		B00000000000000000000008 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B00000000000000000000020 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B00000000000000000000021 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -34,6 +73,8 @@
 			isa = PBXGroup;
 			children = (
 				B0000000000000000000000A /* LoopBrowserNative */,
+				B0000000000000000000001E /* LoopBrowserNativeTests */,
+				B0000000000000000000001F /* LoopBrowserNativeUITests */,
 				B0000000000000000000000B /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +82,7 @@
 		B0000000000000000000000A /* LoopBrowserNative */ = {
 			isa = PBXGroup;
 			children = (
+				B00000000000000000000017 /* CanvasGeometry.swift */,
 				B00000000000000000000002 /* LoopBrowserNativeApp.swift */,
 				B00000000000000000000004 /* LocalMCPServer.swift */,
 				B00000000000000000000006 /* loop-browser-app-icon.icns */,
@@ -48,10 +90,28 @@
 			path = LoopBrowserNative;
 			sourceTree = "<group>";
 		};
+		B0000000000000000000001E /* LoopBrowserNativeTests */ = {
+			isa = PBXGroup;
+			children = (
+				B0000000000000000000001A /* CanvasInputRouterTests.swift */,
+			);
+			path = LoopBrowserNativeTests;
+			sourceTree = "<group>";
+		};
+		B0000000000000000000001F /* LoopBrowserNativeUITests */ = {
+			isa = PBXGroup;
+			children = (
+				B0000000000000000000001C /* LoopBrowserNativeUITests.swift */,
+			);
+			path = LoopBrowserNativeUITests;
+			sourceTree = "<group>";
+		};
 		B0000000000000000000000B /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				B00000000000000000000007 /* LoopBrowserNative.app */,
+				B0000000000000000000001B /* LoopBrowserNativeTests.xctest */,
+				B0000000000000000000001D /* LoopBrowserNativeUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -76,6 +136,42 @@
 			productReference = B00000000000000000000007 /* LoopBrowserNative.app */;
 			productType = "com.apple.product-type.application";
 		};
+		B00000000000000000000028 /* LoopBrowserNativeTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B00000000000000000000030 /* Build configuration list for PBXNativeTarget "LoopBrowserNativeTests" */;
+			buildPhases = (
+				B00000000000000000000022 /* Sources */,
+				B00000000000000000000020 /* Frameworks */,
+				B0000000000000000000002A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B00000000000000000000024 /* PBXTargetDependency */,
+			);
+			name = LoopBrowserNativeTests;
+			productName = LoopBrowserNativeTests;
+			productReference = B0000000000000000000001B /* LoopBrowserNativeTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		B00000000000000000000029 /* LoopBrowserNativeUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B00000000000000000000031 /* Build configuration list for PBXNativeTarget "LoopBrowserNativeUITests" */;
+			buildPhases = (
+				B00000000000000000000023 /* Sources */,
+				B00000000000000000000021 /* Frameworks */,
+				B0000000000000000000002B /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B00000000000000000000025 /* PBXTargetDependency */,
+			);
+			name = LoopBrowserNativeUITests;
+			productName = LoopBrowserNativeUITests;
+			productReference = B0000000000000000000001D /* LoopBrowserNativeUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -88,6 +184,14 @@
 				TargetAttributes = {
 					B0000000000000000000000C = {
 						CreatedOnToolsVersion = 26.3;
+					};
+					B00000000000000000000028 = {
+						CreatedOnToolsVersion = 26.3;
+						TestTargetID = B0000000000000000000000C;
+					};
+					B00000000000000000000029 = {
+						CreatedOnToolsVersion = 26.3;
+						TestTargetID = B0000000000000000000000C;
 					};
 				};
 			};
@@ -105,6 +209,8 @@
 			projectRoot = "";
 			targets = (
 				B0000000000000000000000C /* LoopBrowserNative */,
+				B00000000000000000000028 /* LoopBrowserNativeTests */,
+				B00000000000000000000029 /* LoopBrowserNativeUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -118,6 +224,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B0000000000000000000002A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B0000000000000000000002B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -125,12 +245,42 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B00000000000000000000016 /* CanvasGeometry.swift in Sources */,
 				B00000000000000000000001 /* LoopBrowserNativeApp.swift in Sources */,
 				B00000000000000000000003 /* LocalMCPServer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B00000000000000000000022 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000018 /* CanvasInputRouterTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B00000000000000000000023 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000019 /* LoopBrowserNativeUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B00000000000000000000024 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B0000000000000000000000C /* LoopBrowserNative */;
+			targetProxy = B00000000000000000000026 /* PBXContainerItemProxy */;
+		};
+		B00000000000000000000025 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B0000000000000000000000C /* LoopBrowserNative */;
+			targetProxy = B00000000000000000000027 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		B00000000000000000000012 /* Debug */ = {
@@ -139,7 +289,8 @@
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
-				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGNING_ALLOWED = YES;
 				COPY_PHASE_STRIP = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				GCC_OPTIMIZATION_LEVEL = 0;
@@ -156,7 +307,8 @@
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
-				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGNING_ALLOWED = YES;
 				COPY_PHASE_STRIP = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
@@ -167,7 +319,9 @@
 		B00000000000000000000014 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGNING_ALLOWED = YES;
+				ENABLE_TESTABILITY = YES;
 				ENABLE_APP_SANDBOX = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Loop Browser";
@@ -186,7 +340,8 @@
 		B00000000000000000000015 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGNING_ALLOWED = YES;
 				ENABLE_APP_SANDBOX = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Loop Browser";
@@ -199,6 +354,90 @@
 				SDKROOT = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		B0000000000000000000002C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGNING_ALLOWED = YES;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@loader_path/../Frameworks",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.loopbrowser.LoopBrowserNativeTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LoopBrowserNative.app/Contents/MacOS/LoopBrowserNative";
+				TEST_TARGET_NAME = LoopBrowserNative;
+			};
+			name = Debug;
+		};
+		B0000000000000000000002D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGNING_ALLOWED = YES;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@loader_path/../Frameworks",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.loopbrowser.LoopBrowserNativeTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LoopBrowserNative.app/Contents/MacOS/LoopBrowserNative";
+				TEST_TARGET_NAME = LoopBrowserNative;
+			};
+			name = Release;
+		};
+		B0000000000000000000002E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGNING_ALLOWED = YES;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@loader_path/../Frameworks",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.loopbrowser.LoopBrowserNativeUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = LoopBrowserNative;
+			};
+			name = Debug;
+		};
+		B0000000000000000000002F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGNING_ALLOWED = YES;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@loader_path/../Frameworks",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.loopbrowser.LoopBrowserNativeUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = LoopBrowserNative;
 			};
 			name = Release;
 		};
@@ -219,6 +458,24 @@
 			buildConfigurations = (
 				B00000000000000000000014 /* Debug */,
 				B00000000000000000000015 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B00000000000000000000030 /* Build configuration list for PBXNativeTarget "LoopBrowserNativeTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B0000000000000000000002C /* Debug */,
+				B0000000000000000000002D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B00000000000000000000031 /* Build configuration list for PBXNativeTarget "LoopBrowserNativeUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B0000000000000000000002E /* Debug */,
+				B0000000000000000000002F /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

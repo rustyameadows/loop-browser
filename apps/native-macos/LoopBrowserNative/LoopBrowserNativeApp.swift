@@ -11,13 +11,6 @@ enum ViewportStatus: String, Codable, CaseIterable {
   case disconnected
 }
 
-struct ViewportFrame: Codable, Equatable {
-  var x: Double
-  var y: Double
-  var width: Double
-  var height: Double
-}
-
 struct ViewportSnapshot: Codable, Identifiable {
   var id: UUID
   var label: String
@@ -33,6 +26,8 @@ struct WorkspaceStateFile: Codable {
   var canvasOffsetX: Double
   var canvasOffsetY: Double
   var viewports: [ViewportSnapshot]
+  var inspectorCollapsed: Bool?
+  var inspectorWidth: Double?
 }
 
 struct ProjectConfigFile: Codable {
@@ -207,6 +202,11 @@ func deriveProjectSessionSlug(projectRoot: URL) -> String {
 }
 
 func applicationSupportDirectory() -> URL {
+  if let overridePath = ProcessInfo.processInfo.environment["LOOP_BROWSER_APP_SUPPORT_DIR"],
+     !overridePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+    return URL(fileURLWithPath: overridePath, isDirectory: true)
+  }
+
   let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
     ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
   return base.appendingPathComponent("Loop Browser Native", isDirectory: true)
@@ -256,6 +256,86 @@ func resolvedProjectIconURL(projectRoot: URL, projectIconPath: String?) -> URL? 
   return projectRoot.appendingPathComponent(trimmed.replacingOccurrences(of: "./", with: ""))
 }
 
+enum CanvasUI {
+  static let headerHeight: CGFloat = 46
+  static let edgeHandleThickness: CGFloat = 20
+  static let edgeHandleLength: CGFloat = 72
+  static let cornerHandleSize: CGFloat = 24
+  static let handleOutset: CGFloat = 2
+  static let headerTrailingPassthroughWidth: CGFloat = 280
+}
+
+struct AccessibilityMarkerView: NSViewRepresentable {
+  var identifier: String
+  var label: String? = nil
+  var value: String? = nil
+
+  func makeNSView(context: Context) -> AccessibilityMarkerNSView {
+    let view = AccessibilityMarkerNSView()
+    view.wantsLayer = true
+    view.layer?.backgroundColor = NSColor.clear.cgColor
+    return view
+  }
+
+  func updateNSView(_ nsView: AccessibilityMarkerNSView, context: Context) {
+    nsView.setAccessibilityElement(true)
+    nsView.setAccessibilityIdentifier(identifier)
+    nsView.setAccessibilityLabel(label ?? identifier)
+    nsView.setAccessibilityValue(value)
+  }
+}
+
+final class AccessibilityMarkerNSView: NSView {
+  override var isFlipped: Bool { true }
+
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    nil
+  }
+}
+
+struct NativeLaunchOptions {
+  var projectRoot: URL?
+  var startupURLs: [String]
+  var startupViewportWidth: Double?
+  var startupViewportHeight: Double?
+  var disableWorkspaceRestore: Bool
+  var disableMCP: Bool
+
+  static var current: NativeLaunchOptions {
+    let environment = ProcessInfo.processInfo.environment
+    let projectRoot = environment["LOOP_BROWSER_TEST_PROJECT_ROOT"]
+      .flatMap { value -> URL? in
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return URL(fileURLWithPath: trimmed, isDirectory: true)
+      }
+
+    let startupURLs = [
+      environment["LOOP_BROWSER_TEST_START_URL"],
+      environment["LOOP_BROWSER_TEST_SECONDARY_URL"],
+    ]
+    .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+    .filter { !$0.isEmpty }
+
+    let startupViewportWidth = environment["LOOP_BROWSER_TEST_VIEWPORT_WIDTH"]
+      .flatMap { Double($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    let startupViewportHeight = environment["LOOP_BROWSER_TEST_VIEWPORT_HEIGHT"]
+      .flatMap { Double($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+
+    let disableWorkspaceRestore = environment["LOOP_BROWSER_TEST_DISABLE_RESTORE"] == "1"
+    let disableMCP = environment["LOOP_BROWSER_TEST_DISABLE_MCP"] == "1"
+
+    return NativeLaunchOptions(
+      projectRoot: projectRoot,
+      startupURLs: startupURLs,
+      startupViewportWidth: startupViewportWidth,
+      startupViewportHeight: startupViewportHeight,
+      disableWorkspaceRestore: disableWorkspaceRestore,
+      disableMCP: disableMCP
+    )
+  }
+}
+
 @MainActor
 final class ViewportController: NSObject, ObservableObject, Identifiable, WKNavigationDelegate {
   @Published var label: String
@@ -265,6 +345,8 @@ final class ViewportController: NSObject, ObservableObject, Identifiable, WKNavi
   @Published var frame: ViewportFrame
   @Published var hasVisibleLoginForm = false
   @Published var lastRefreshedAt: Date?
+  @Published var canGoBack = false
+  @Published var canGoForward = false
 
   let id: UUID
   let webView: WKWebView
@@ -291,6 +373,7 @@ final class ViewportController: NSObject, ObservableObject, Identifiable, WKNavi
       self.webView.loadHTMLString(Self.invalidURLHTML(snapshot.urlString), baseURL: nil)
       self.status = .error
     }
+    syncNavigationState()
   }
 
   static func invalidURLHTML(_ value: String) -> String {
@@ -321,12 +404,14 @@ final class ViewportController: NSObject, ObservableObject, Identifiable, WKNavi
     guard let url = URL(string: urlString) else {
       webView.loadHTMLString(Self.invalidURLHTML(urlString), baseURL: nil)
       status = .error
+      syncNavigationState()
       onChange?()
       return
     }
 
     status = .loading
     webView.load(URLRequest(url: url))
+    syncNavigationState()
     onChange?()
   }
 
@@ -334,6 +419,7 @@ final class ViewportController: NSObject, ObservableObject, Identifiable, WKNavi
     status = .refreshing
     lastRefreshedAt = Date()
     webView.reload()
+    syncNavigationState()
     onChange?()
   }
 
@@ -341,7 +427,29 @@ final class ViewportController: NSObject, ObservableObject, Identifiable, WKNavi
     status = .refreshing
     lastRefreshedAt = Date()
     webView.reloadFromOrigin()
+    syncNavigationState()
     onChange?()
+  }
+
+  func goBack() {
+    guard webView.canGoBack else { return }
+    status = .loading
+    webView.goBack()
+    syncNavigationState()
+    onChange?()
+  }
+
+  func goForward() {
+    guard webView.canGoForward else { return }
+    status = .loading
+    webView.goForward()
+    syncNavigationState()
+    onChange?()
+  }
+
+  func syncNavigationState() {
+    canGoBack = webView.canGoBack
+    canGoForward = webView.canGoForward
   }
 
   func detectLoginForm() {
@@ -481,6 +589,7 @@ final class ViewportController: NSObject, ObservableObject, Identifiable, WKNavi
 
   func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
     status = .loading
+    syncNavigationState()
     onChange?()
   }
 
@@ -491,29 +600,253 @@ final class ViewportController: NSObject, ObservableObject, Identifiable, WKNavi
     currentURLString = webView.url?.absoluteString ?? currentURLString
     status = .live
     lastRefreshedAt = Date()
+    syncNavigationState()
     detectLoginForm()
     onChange?()
   }
 
   func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
     status = .error
+    syncNavigationState()
     onChange?()
   }
 
   func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
     status = .error
+    syncNavigationState()
     onChange?()
   }
 }
 
 struct EmbeddedViewportWebView: NSViewRepresentable {
   @ObservedObject var controller: ViewportController
+  var accessibilityIdentifier: String
 
   func makeNSView(context: Context) -> WKWebView {
-    controller.webView
+    controller.webView.setAccessibilityIdentifier(accessibilityIdentifier)
+    controller.webView.setAccessibilityLabel(controller.label)
+    return controller.webView
   }
 
-  func updateNSView(_ nsView: WKWebView, context: Context) {}
+  func updateNSView(_ nsView: WKWebView, context: Context) {
+    nsView.setAccessibilityIdentifier(accessibilityIdentifier)
+    nsView.setAccessibilityLabel(controller.label)
+  }
+}
+
+struct CanvasInteractionSurface: NSViewRepresentable {
+  var transform: CanvasTransform
+  var hitMap: CanvasHitMap
+  var onCanvasMouseDown: () -> Void
+  var onPanChanged: (CGSize, CGSize) -> Void
+  var onPanEnded: () -> Void
+  var onScrollPan: (CGFloat, CGFloat) -> Void
+  var onPinchZoom: (CGPoint, CGFloat) -> Void
+  var onViewportSelected: (UUID) -> Void
+  var onViewportDragged: (UUID, CGPoint) -> Void
+  var onViewportDragEnded: (UUID) -> Void
+  var onViewportResized: (UUID, ViewportFrame) -> Void
+  var onViewportResizeEnded: (UUID) -> Void
+
+  func makeNSView(context: Context) -> CanvasInteractionNSView {
+    let view = CanvasInteractionNSView()
+    view.wantsLayer = true
+    view.layer?.backgroundColor = NSColor.clear.cgColor
+    view.setAccessibilityElement(true)
+    view.setAccessibilityIdentifier("canvas-interaction-surface")
+    return view
+  }
+
+  func updateNSView(_ nsView: CanvasInteractionNSView, context: Context) {
+    nsView.router.transform = transform
+    nsView.router.hitMap = hitMap
+    nsView.router.onCanvasMouseDown = onCanvasMouseDown
+    nsView.router.onPanChanged = onPanChanged
+    nsView.router.onPanEnded = onPanEnded
+    nsView.router.onScrollPan = onScrollPan
+    nsView.router.onPinchZoom = onPinchZoom
+    nsView.router.onViewportSelected = onViewportSelected
+    nsView.router.onViewportDragged = onViewportDragged
+    nsView.router.onViewportDragEnded = onViewportDragEnded
+    nsView.router.onViewportResized = onViewportResized
+    nsView.router.onViewportResizeEnded = onViewportResizeEnded
+  }
+}
+
+final class CanvasInputRouter {
+  enum Interaction {
+    case canvasPan(originViewportPoint: CGPoint, originCanvasOffset: CGSize)
+    case viewportDrag(id: UUID, grabOffset: CGSize)
+    case viewportResize(id: UUID, handle: ViewportResizeHandle, originFrame: ViewportFrame, startCanvasPoint: CGPoint)
+  }
+
+  var transform = CanvasTransform(scale: 1, offset: .zero)
+  var hitMap = CanvasHitMap(transform: CanvasTransform(scale: 1, offset: .zero), viewports: [])
+
+  var onCanvasMouseDown: (() -> Void)?
+  var onPanChanged: ((CGSize, CGSize) -> Void)?
+  var onPanEnded: (() -> Void)?
+  var onScrollPan: ((CGFloat, CGFloat) -> Void)?
+  var onPinchZoom: ((CGPoint, CGFloat) -> Void)?
+  var onViewportSelected: ((UUID) -> Void)?
+  var onViewportDragged: ((UUID, CGPoint) -> Void)?
+  var onViewportDragEnded: ((UUID) -> Void)?
+  var onViewportResized: ((UUID, ViewportFrame) -> Void)?
+  var onViewportResizeEnded: ((UUID) -> Void)?
+
+  private var activeInteraction: Interaction?
+
+  func shouldIntercept(_ viewportPoint: CGPoint) -> Bool {
+    switch hitMap.region(at: viewportPoint) {
+    case .emptyCanvas, .viewportHeader, .viewportHandle:
+      return true
+    case .viewportPassthrough:
+      return false
+    }
+  }
+
+  func mouseDown(at viewportPoint: CGPoint) {
+    switch hitMap.region(at: viewportPoint) {
+    case .emptyCanvas:
+      onCanvasMouseDown?()
+      activeInteraction = .canvasPan(
+        originViewportPoint: viewportPoint,
+        originCanvasOffset: transform.offset
+      )
+    case .viewportHeader(let viewportID):
+      guard let frame = hitMap.frame(for: viewportID) else { return }
+      onViewportSelected?(viewportID)
+      let canvasPoint = CanvasInteractionMath.canvasPoint(
+        viewportPoint: viewportPoint,
+        transform: transform
+      )
+      activeInteraction = .viewportDrag(
+        id: viewportID,
+        grabOffset: CGSize(
+          width: canvasPoint.x - frame.x,
+          height: canvasPoint.y - frame.y
+        )
+      )
+    case .viewportHandle(let viewportID, let handle):
+      guard let frame = hitMap.frame(for: viewportID) else { return }
+      onViewportSelected?(viewportID)
+      activeInteraction = .viewportResize(
+        id: viewportID,
+        handle: handle,
+        originFrame: frame,
+        startCanvasPoint: CanvasInteractionMath.canvasPoint(
+          viewportPoint: viewportPoint,
+          transform: transform
+        )
+      )
+    case .viewportPassthrough:
+      activeInteraction = nil
+    }
+  }
+
+  func mouseDragged(to viewportPoint: CGPoint, modifierFlags: NSEvent.ModifierFlags) {
+    switch activeInteraction {
+    case .canvasPan(let originViewportPoint, let originCanvasOffset):
+      let translation = CGSize(
+        width: viewportPoint.x - originViewportPoint.x,
+        height: viewportPoint.y - originViewportPoint.y
+      )
+      onPanChanged?(originCanvasOffset, translation)
+    case .viewportDrag(let viewportID, let grabOffset):
+      let currentCanvasPoint = CanvasInteractionMath.canvasPoint(
+        viewportPoint: viewportPoint,
+        transform: transform
+      )
+      let origin = CanvasInteractionMath.draggedViewportOrigin(
+        currentCanvasPoint: currentCanvasPoint,
+        grabOffset: grabOffset
+      )
+      onViewportDragged?(viewportID, origin)
+    case .viewportResize(let viewportID, let handle, let originFrame, let startCanvasPoint):
+      let currentCanvasPoint = CanvasInteractionMath.canvasPoint(
+        viewportPoint: viewportPoint,
+        transform: transform
+      )
+      let nextFrame = handle.resizedFrame(
+        from: originFrame,
+        deltaX: currentCanvasPoint.x - startCanvasPoint.x,
+        deltaY: currentCanvasPoint.y - startCanvasPoint.y,
+        symmetric: modifierFlags.contains(.shift)
+      )
+      onViewportResized?(viewportID, nextFrame)
+    case .none:
+      break
+    }
+  }
+
+  func mouseUp() {
+    switch activeInteraction {
+    case .canvasPan:
+      onPanEnded?()
+    case .viewportDrag(let viewportID, _):
+      onViewportDragEnded?(viewportID)
+    case .viewportResize(let viewportID, _, _, _):
+      onViewportResizeEnded?(viewportID)
+    case .none:
+      break
+    }
+    activeInteraction = nil
+  }
+
+  func scroll(at viewportPoint: CGPoint, deltaX: CGFloat, deltaY: CGFloat) {
+    guard case .emptyCanvas = hitMap.region(at: viewportPoint) else { return }
+    onScrollPan?(deltaX, deltaY)
+  }
+
+  func magnify(at viewportPoint: CGPoint, magnification: CGFloat) {
+    guard case .emptyCanvas = hitMap.region(at: viewportPoint) else { return }
+    onPinchZoom?(viewportPoint, 1 + magnification)
+  }
+}
+
+final class CanvasInteractionNSView: NSView {
+  let router = CanvasInputRouter()
+
+  override var isFlipped: Bool { true }
+  override var acceptsFirstResponder: Bool { true }
+
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+    true
+  }
+
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    router.shouldIntercept(point) ? self : nil
+  }
+
+  override func mouseDown(with event: NSEvent) {
+    router.mouseDown(at: convert(event.locationInWindow, from: nil))
+  }
+
+  override func mouseDragged(with event: NSEvent) {
+    router.mouseDragged(
+      to: convert(event.locationInWindow, from: nil),
+      modifierFlags: event.modifierFlags
+    )
+  }
+
+  override func mouseUp(with event: NSEvent) {
+    router.mouseUp()
+  }
+
+  override func scrollWheel(with event: NSEvent) {
+    let point = convert(event.locationInWindow, from: nil)
+    let deltaMultiplier: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 10
+    router.scroll(
+      at: point,
+      deltaX: event.scrollingDeltaX * deltaMultiplier,
+      deltaY: event.scrollingDeltaY * deltaMultiplier
+    )
+  }
+
+  override func magnify(with event: NSEvent) {
+    let point = convert(event.locationInWindow, from: nil)
+    router.magnify(at: point, magnification: event.magnification)
+  }
 }
 
 @MainActor
@@ -535,6 +868,14 @@ final class ExternalMCPAssistantAdapter: ObservableObject, AssistantService {
 
 @MainActor
 final class LoopBrowserModel: ObservableObject {
+  struct PendingViewportSeed {
+    var routeOrURL: String
+    var label: String?
+    var width: Double
+    var height: Double
+    var staggerIndex: Int
+  }
+
   @Published var projectRoot: URL?
   @Published var projectConfig: ProjectConfigFile = .default
   @Published var localCredentials: LocalAgentLoginFile.Credentials?
@@ -542,6 +883,9 @@ final class LoopBrowserModel: ObservableObject {
   @Published var selectedViewportID: UUID?
   @Published var canvasScale: CGFloat = 1
   @Published var canvasOffset: CGSize = .zero
+  @Published var canvasViewportSize: CGSize = .zero
+  @Published var isInspectorCollapsed = false
+  @Published var inspectorWidth: CGFloat = 340
   @Published var showProjectSettings = false
   @Published var actionLog: [ActionLogEntry] = []
   @Published var projectError: String?
@@ -550,22 +894,38 @@ final class LoopBrowserModel: ObservableObject {
   let embeddedAssistant = EmbeddedCodexAssistantAdapter()
 
   private lazy var mcpServer = LocalMCPServer(model: self)
+  private var pendingPersistWorkItem: DispatchWorkItem?
+  private var pendingStartupViewports: [PendingViewportSeed] = []
+  private let launchOptions = NativeLaunchOptions.current
+
+  private let minimumCanvasScale: CGFloat = CanvasInteractionMath.minimumCanvasScale
+  private let maximumCanvasScale: CGFloat = CanvasInteractionMath.maximumCanvasScale
+  private let minimumInspectorWidth: CGFloat = 280
+  private let maximumInspectorWidth: CGFloat = 520
 
   func startServices() {
-    mcpServer.onConnectionInfo = { [weak self] connectionInfo in
-      Task { @MainActor in
-        self?.externalAssistant.connectionInfo = connectionInfo
+    if !launchOptions.disableMCP {
+      mcpServer.onConnectionInfo = { [weak self] connectionInfo in
+        Task { @MainActor in
+          self?.externalAssistant.connectionInfo = connectionInfo
+        }
       }
+
+      mcpServer.onError = { [weak self] message in
+        Task { @MainActor in
+          self?.externalAssistant.lastError = message
+          self?.recordAction("MCP", detail: message, success: false)
+        }
+      }
+
+      mcpServer.startIfNeeded()
+    } else {
+      externalAssistant.lastError = "MCP disabled for native test launch."
     }
 
-    mcpServer.onError = { [weak self] message in
-      Task { @MainActor in
-        self?.externalAssistant.lastError = message
-        self?.recordAction("MCP", detail: message, success: false)
-      }
+    if projectRoot == nil, let projectRoot = launchOptions.projectRoot {
+      openProject(at: projectRoot)
     }
-
-    mcpServer.startIfNeeded()
   }
 
   func chooseProjectFolder() {
@@ -582,12 +942,39 @@ final class LoopBrowserModel: ObservableObject {
   func openProject(at projectURL: URL) {
     projectRoot = projectURL
     projectError = nil
+    pendingStartupViewports = []
     loadProjectConfig()
     loadLocalCredentials()
-    loadWorkspaceState()
+    if launchOptions.disableWorkspaceRestore {
+      resetWorkspaceState()
+    } else {
+      loadWorkspaceState()
+    }
     applyProjectIdentity()
-    if viewports.isEmpty, let defaultUrl = configuredDefaultURL, !defaultUrl.isEmpty {
-      _ = addViewport(routeOrURL: defaultUrl, label: "Home", width: 1200, height: 800)
+    if viewports.isEmpty {
+      if !launchOptions.startupURLs.isEmpty {
+        pendingStartupViewports = launchOptions.startupURLs.enumerated().map { index, startupURL in
+          PendingViewportSeed(
+            routeOrURL: startupURL,
+            label: index == 0 ? "Primary" : "Viewport \(index + 1)",
+            width: launchOptions.startupViewportWidth ?? 1200,
+            height: launchOptions.startupViewportHeight ?? 800,
+            staggerIndex: index
+          )
+        }
+        applyPendingStartupViewportsIfNeeded()
+      } else if let defaultUrl = configuredDefaultURL, !defaultUrl.isEmpty {
+        pendingStartupViewports = [
+          PendingViewportSeed(
+            routeOrURL: defaultUrl,
+            label: "Home",
+            width: 1200,
+            height: 800,
+            staggerIndex: 0
+          ),
+        ]
+        applyPendingStartupViewportsIfNeeded()
+      }
     }
     recordAction("Project", detail: "Opened \(projectURL.lastPathComponent)", success: true)
   }
@@ -616,6 +1003,170 @@ final class LoopBrowserModel: ObservableObject {
       return viewports.first(where: { $0.id == selectedViewportID })
     }
     return viewports.first
+  }
+
+  func updateCanvasViewportSize(_ size: CGSize) {
+    canvasViewportSize = size
+    applyPendingStartupViewportsIfNeeded()
+  }
+
+  func toggleInspector() {
+    setInspectorCollapsed(!isInspectorCollapsed)
+  }
+
+  func setInspectorCollapsed(_ collapsed: Bool) {
+    guard isInspectorCollapsed != collapsed else { return }
+    isInspectorCollapsed = collapsed
+    persistWorkspaceState()
+  }
+
+  func setInspectorWidth(_ width: CGFloat) {
+    let clamped = min(max(width, minimumInspectorWidth), maximumInspectorWidth)
+    guard abs(clamped - inspectorWidth) > 0.5 else { return }
+    inspectorWidth = clamped
+    scheduleWorkspacePersistence()
+  }
+
+  func visibleCanvasCenter(in size: CGSize? = nil) -> CGPoint {
+    let viewportSize = size ?? canvasViewportSize
+    return CanvasInteractionMath.visibleCanvasCenter(
+      viewportSize: viewportSize,
+      transform: CanvasTransform(scale: canvasScale, offset: canvasOffset)
+    )
+  }
+
+  func canvasPoint(from viewportPoint: CGPoint) -> CGPoint {
+    CanvasInteractionMath.canvasPoint(
+      viewportPoint: viewportPoint,
+      transform: CanvasTransform(scale: canvasScale, offset: canvasOffset)
+    )
+  }
+
+  func canvasHitMap() -> CanvasHitMap {
+    var orderedViewports = viewports
+    if let selectedViewportID,
+       let selectedIndex = orderedViewports.firstIndex(where: { $0.id == selectedViewportID }) {
+      let selected = orderedViewports.remove(at: selectedIndex)
+      orderedViewports.append(selected)
+    }
+
+    return CanvasHitMap(
+      transform: CanvasTransform(scale: canvasScale, offset: canvasOffset),
+      viewports: orderedViewports.map { viewport in
+        CanvasHitViewport(id: viewport.id, frame: viewport.frame)
+      },
+      headerHeight: CanvasUI.headerHeight,
+      headerTrailingPassthroughWidth: CanvasUI.headerTrailingPassthroughWidth,
+      edgeHandleThickness: CanvasUI.edgeHandleThickness,
+      edgeHandleLength: CanvasUI.edgeHandleLength,
+      cornerHandleSize: CanvasUI.cornerHandleSize,
+      handleOutset: CanvasUI.handleOutset
+    )
+  }
+
+  func panCanvasByScroll(deltaX: CGFloat, deltaY: CGFloat) {
+    canvasOffset = CanvasInteractionMath.pannedOffset(
+      origin: canvasOffset,
+      deltaX: deltaX,
+      deltaY: deltaY
+    )
+    scheduleWorkspacePersistence()
+  }
+
+  func zoomIn() {
+    zoomCanvas(around: canvasViewportCenter, zoomFactor: 1.15)
+  }
+
+  func zoomOut() {
+    zoomCanvas(around: canvasViewportCenter, zoomFactor: 1 / 1.15)
+  }
+
+  func resetCanvasZoom() {
+    guard canvasScale > 0 else { return }
+    let anchor = CanvasInteractionMath.canvasPoint(
+      viewportPoint: canvasViewportCenter,
+      transform: CanvasTransform(scale: canvasScale, offset: canvasOffset)
+    )
+    canvasScale = 1
+    canvasOffset = CGSize(
+      width: canvasViewportCenter.x - anchor.x,
+      height: canvasViewportCenter.y - anchor.y
+    )
+    scheduleWorkspacePersistence()
+  }
+
+  func zoomCanvas(
+    around viewportPoint: CGPoint,
+    zoomFactor: CGFloat,
+    persistImmediately: Bool = false
+  ) {
+    let transform = CanvasInteractionMath.zoomedTransform(
+      viewportPoint: viewportPoint,
+      zoomFactor: zoomFactor,
+      transform: CanvasTransform(scale: canvasScale, offset: canvasOffset),
+      minimumScale: minimumCanvasScale,
+      maximumScale: maximumCanvasScale
+    )
+    canvasScale = transform.scale
+    canvasOffset = transform.offset
+    if persistImmediately {
+      persistWorkspaceState()
+    } else {
+      scheduleWorkspacePersistence()
+    }
+  }
+
+  func panCanvas(from origin: CGSize, translation: CGSize) {
+    canvasOffset = CanvasInteractionMath.pannedOffset(
+      origin: origin,
+      translation: translation
+    )
+  }
+
+  func finishCanvasPan() {
+    persistWorkspaceState()
+  }
+
+  func selectViewport(_ viewportID: UUID?) {
+    selectedViewportID = viewportID
+  }
+
+  func updateViewportOrigin(viewportID: UUID, origin: CGPoint) {
+    guard let viewport = viewports.first(where: { $0.id == viewportID }) else { return }
+    viewport.frame.x = origin.x
+    viewport.frame.y = origin.y
+    selectedViewportID = viewportID
+  }
+
+  func finishViewportMove(viewportID: UUID) {
+    guard let viewport = viewports.first(where: { $0.id == viewportID }) else { return }
+    selectedViewportID = viewportID
+    persistWorkspaceState()
+    recordAction("Viewport", detail: "Moved \(viewport.label)", success: true)
+  }
+
+  func applyViewportFrame(viewportID: UUID, frame: ViewportFrame) {
+    guard let viewport = viewports.first(where: { $0.id == viewportID }) else { return }
+    viewport.frame = frame
+    selectedViewportID = viewportID
+  }
+
+  func finishViewportResize(viewportID: UUID) {
+    guard let viewport = viewports.first(where: { $0.id == viewportID }) else { return }
+    selectedViewportID = viewportID
+    persistWorkspaceState()
+    recordAction("Viewport", detail: "Resized \(viewport.label)", success: true)
+  }
+
+  func scheduleWorkspacePersistence() {
+    pendingPersistWorkItem?.cancel()
+    let workItem = DispatchWorkItem { [weak self] in
+      Task { @MainActor in
+        self?.persistWorkspaceState()
+      }
+    }
+    pendingPersistWorkItem = workItem
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: workItem)
   }
 
   func canUseAgentLogin(on viewport: ViewportController) -> Bool {
@@ -647,7 +1198,8 @@ final class LoopBrowserModel: ObservableObject {
     routeOrURL: String,
     label: String? = nil,
     width: Double = 1200,
-    height: Double = 800
+    height: Double = 800,
+    staggerIndex: Int = 0
   ) -> ViewportController? {
     guard let resolvedURL = resolveTargetURL(routeOrURL) else {
       projectError = "Could not resolve viewport URL from \(routeOrURL). Set Default URL or pass a full URL."
@@ -655,16 +1207,15 @@ final class LoopBrowserModel: ObservableObject {
       return nil
     }
 
-    let index = viewports.count
-    let frame = ViewportFrame(
-      x: 120 + Double(index % 3) * 40 + Double(index) * 24,
-      y: 120 + Double(index / 3) * 40,
+    let frame = CanvasInteractionMath.spawnedViewportFrame(
+      center: visibleCanvasCenter(),
       width: width,
-      height: height
+      height: height,
+      staggerIndex: staggerIndex
     )
     let snapshot = ViewportSnapshot(
       id: UUID(),
-      label: label ?? "Viewport \(index + 1)",
+      label: label ?? "Viewport \(viewports.count + 1)",
       urlString: resolvedURL,
       frame: frame,
       status: .loading,
@@ -680,12 +1231,12 @@ final class LoopBrowserModel: ObservableObject {
   }
 
   func addViewports(definitions: [[String: Any]]) {
-    for definition in definitions {
+    for (index, definition) in definitions.enumerated() {
       let route = (definition["route"] as? String) ?? (definition["url"] as? String) ?? ""
       let label = definition["label"] as? String
       let width = definition["width"] as? Double ?? 1200
       let height = definition["height"] as? Double ?? 800
-      _ = addViewport(routeOrURL: route, label: label, width: width, height: height)
+      _ = addViewport(routeOrURL: route, label: label, width: width, height: height, staggerIndex: index)
     }
   }
 
@@ -747,7 +1298,7 @@ final class LoopBrowserModel: ObservableObject {
 
   func setCanvasTransform(scale: CGFloat? = nil, offset: CGSize? = nil) {
     if let scale {
-      canvasScale = min(max(scale, 0.5), 2.0)
+      canvasScale = min(max(scale, minimumCanvasScale), maximumCanvasScale)
     }
     if let offset {
       canvasOffset = offset
@@ -887,6 +1438,12 @@ final class LoopBrowserModel: ObservableObject {
         "scale": canvasScale,
         "offsetX": canvasOffset.width,
         "offsetY": canvasOffset.height,
+        "viewportWidth": canvasViewportSize.width,
+        "viewportHeight": canvasViewportSize.height,
+      ],
+      "inspector": [
+        "collapsed": isInspectorCollapsed,
+        "width": inspectorWidth,
       ],
     ]
   }
@@ -1028,9 +1585,7 @@ final class LoopBrowserModel: ObservableObject {
     guard let projectRoot else { return }
     let stateURL = workspaceStateURL(projectRoot: projectRoot)
     guard FileManager.default.fileExists(atPath: stateURL.path) else {
-      viewports = []
-      canvasScale = 1
-      canvasOffset = .zero
+      resetWorkspaceState()
       return
     }
 
@@ -1039,6 +1594,8 @@ final class LoopBrowserModel: ObservableObject {
       let state = try JSONDecoder().decode(WorkspaceStateFile.self, from: data)
       canvasScale = CGFloat(state.canvasScale)
       canvasOffset = CGSize(width: state.canvasOffsetX, height: state.canvasOffsetY)
+      isInspectorCollapsed = state.inspectorCollapsed ?? false
+      inspectorWidth = CGFloat(state.inspectorWidth ?? 340)
       viewports = state.viewports.map { snapshot in
         let controller = ViewportController(snapshot: snapshot)
         attachViewport(controller)
@@ -1046,11 +1603,18 @@ final class LoopBrowserModel: ObservableObject {
       }
       selectedViewportID = viewports.first?.id
     } catch {
-      viewports = []
-      canvasScale = 1
-      canvasOffset = .zero
+      resetWorkspaceState()
       projectError = "Could not load workspace state: \(error.localizedDescription)"
     }
+  }
+
+  private func resetWorkspaceState() {
+    viewports = []
+    selectedViewportID = nil
+    canvasScale = 1
+    canvasOffset = .zero
+    isInspectorCollapsed = false
+    inspectorWidth = 340
   }
 
   func persistWorkspaceState() {
@@ -1064,7 +1628,9 @@ final class LoopBrowserModel: ObservableObject {
         canvasScale: Double(canvasScale),
         canvasOffsetX: canvasOffset.width,
         canvasOffsetY: canvasOffset.height,
-        viewports: viewports.map { $0.snapshot() }
+        viewports: viewports.map { $0.snapshot() },
+        inspectorCollapsed: isInspectorCollapsed,
+        inspectorWidth: inspectorWidth
       )
       let data = try JSONEncoder.pretty.encode(state)
       try data.write(to: workspaceStateURL(projectRoot: projectRoot), options: .atomic)
@@ -1101,6 +1667,28 @@ final class LoopBrowserModel: ObservableObject {
     actionLog.insert(ActionLogEntry(title: title, detail: detail, success: success), at: 0)
     if actionLog.count > 80 {
       actionLog = Array(actionLog.prefix(80))
+    }
+  }
+
+  private var canvasViewportCenter: CGPoint {
+    CGPoint(x: canvasViewportSize.width / 2, y: canvasViewportSize.height / 2)
+  }
+
+  private func applyPendingStartupViewportsIfNeeded() {
+    guard canvasViewportSize != .zero, viewports.isEmpty, !pendingStartupViewports.isEmpty else {
+      return
+    }
+
+    let seeds = pendingStartupViewports
+    pendingStartupViewports.removeAll()
+    for seed in seeds {
+      _ = addViewport(
+        routeOrURL: seed.routeOrURL,
+        label: seed.label,
+        width: seed.width,
+        height: seed.height,
+        staggerIndex: seed.staggerIndex
+      )
     }
   }
 }
@@ -1187,11 +1775,17 @@ struct RootWorkspaceView: View {
       if model.projectRoot == nil {
         WelcomeView()
       } else {
-        HSplitView {
+        HStack(spacing: 0) {
           WorkspaceCanvasView()
-          InspectorSidebar()
-            .frame(minWidth: 320, idealWidth: 340, maxWidth: 380)
+
+          if !model.isInspectorCollapsed {
+            InspectorResizeHandle()
+            InspectorSidebar()
+              .frame(width: model.inspectorWidth)
+              .transition(.move(edge: .trailing).combined(with: .opacity))
+          }
         }
+        .animation(.spring(response: 0.24, dampingFraction: 0.92), value: model.isInspectorCollapsed)
       }
     }
     .sheet(isPresented: $model.showProjectSettings) {
@@ -1202,64 +1796,93 @@ struct RootWorkspaceView: View {
   }
 }
 
+struct InspectorResizeHandle: View {
+  @EnvironmentObject private var model: LoopBrowserModel
+  @State private var widthOrigin: CGFloat?
+
+  var body: some View {
+    Rectangle()
+      .fill(Color.black.opacity(0.06))
+      .frame(width: 6)
+      .overlay(Color.white.opacity(0.3).frame(width: 1))
+      .contentShape(Rectangle())
+      .gesture(
+        DragGesture()
+          .onChanged { value in
+            if widthOrigin == nil {
+              widthOrigin = model.inspectorWidth
+            }
+            guard let widthOrigin else { return }
+            model.setInspectorWidth(widthOrigin - value.translation.width)
+          }
+          .onEnded { _ in
+            widthOrigin = nil
+            model.persistWorkspaceState()
+          }
+      )
+  }
+}
+
 struct WorkspaceCanvasView: View {
   @EnvironmentObject private var model: LoopBrowserModel
-  @State private var canvasDragOrigin: CGSize = .zero
-  @State private var canvasScaleOrigin: CGFloat = 1
 
   var body: some View {
     VStack(spacing: 0) {
       WorkspaceToolbar()
       GeometryReader { geometry in
         ZStack(alignment: .topLeading) {
-          CanvasGridView()
-            .contentShape(Rectangle())
-            .gesture(
-              DragGesture()
-                .onChanged { value in
-                  if canvasDragOrigin == .zero {
-                    canvasDragOrigin = model.canvasOffset
-                  }
-                  model.canvasOffset = CGSize(
-                    width: canvasDragOrigin.width + value.translation.width,
-                    height: canvasDragOrigin.height + value.translation.height
-                  )
-                }
-                .onEnded { _ in
-                  canvasDragOrigin = .zero
-                  model.persistWorkspaceState()
-                }
-            )
-            .simultaneousGesture(
-              MagnificationGesture()
-                .onChanged { value in
-                  if canvasScaleOrigin == 1 {
-                    canvasScaleOrigin = model.canvasScale
-                  }
-                  model.canvasScale = min(max(canvasScaleOrigin * value, 0.5), 2.0)
-                }
-                .onEnded { _ in
-                  canvasScaleOrigin = 1
-                  model.persistWorkspaceState()
-                }
-            )
-
           ZStack(alignment: .topLeading) {
-            ForEach(model.viewports) { viewport in
-              ViewportCardView(controller: viewport)
+            CanvasGridView()
+            ForEach(Array(model.viewports.enumerated()), id: \.element.id) { index, viewport in
+              ViewportCardView(controller: viewport, index: index)
                 .position(
                   x: CGFloat(viewport.frame.x + viewport.frame.width / 2),
                   y: CGFloat(viewport.frame.y + viewport.frame.height / 2)
                 )
                 .zIndex(model.selectedViewportID == viewport.id ? 10 : 1)
-                .onTapGesture {
-                  model.selectedViewportID = viewport.id
-                }
             }
           }
-          .frame(width: max(geometry.size.width * 3, 3200), height: max(geometry.size.height * 3, 2200), alignment: .topLeading)
+          .frame(width: max(geometry.size.width * 10, 12000), height: max(geometry.size.height * 10, 9000), alignment: .topLeading)
           .scaleEffect(model.canvasScale, anchor: .topLeading)
           .offset(model.canvasOffset)
+
+          CanvasInteractionSurface(
+            transform: CanvasTransform(scale: model.canvasScale, offset: model.canvasOffset),
+            hitMap: model.canvasHitMap(),
+            onCanvasMouseDown: {
+              model.selectViewport(nil)
+            },
+            onPanChanged: { origin, translation in
+              model.panCanvas(from: origin, translation: translation)
+            },
+            onPanEnded: {
+              model.finishCanvasPan()
+            },
+            onScrollPan: { deltaX, deltaY in
+              model.panCanvasByScroll(deltaX: deltaX, deltaY: deltaY)
+            },
+            onPinchZoom: { point, zoomFactor in
+              model.zoomCanvas(around: point, zoomFactor: zoomFactor)
+            },
+            onViewportSelected: { viewportID in
+              model.selectViewport(viewportID)
+            },
+            onViewportDragged: { viewportID, origin in
+              model.updateViewportOrigin(viewportID: viewportID, origin: origin)
+            },
+            onViewportDragEnded: { viewportID in
+              model.finishViewportMove(viewportID: viewportID)
+            },
+            onViewportResized: { viewportID, frame in
+              model.applyViewportFrame(viewportID: viewportID, frame: frame)
+            },
+            onViewportResizeEnded: { viewportID in
+              model.finishViewportResize(viewportID: viewportID)
+            }
+          )
+          .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+
+          EmptyCanvasProbeView()
         }
         .clipped()
         .background(
@@ -1272,6 +1895,13 @@ struct WorkspaceCanvasView: View {
             endPoint: .bottomTrailing
           )
         )
+        .coordinateSpace(name: "canvasViewport")
+        .onAppear {
+          model.updateCanvasViewportSize(geometry.size)
+        }
+        .onChange(of: geometry.size) { newSize in
+          model.updateCanvasViewportSize(newSize)
+        }
       }
     }
   }
@@ -1300,10 +1930,36 @@ struct WorkspaceToolbar: View {
         newViewportText = ""
       }
       .buttonStyle(.borderedProminent)
+      Button {
+        model.zoomOut()
+      } label: {
+        Label("Zoom Out", systemImage: "minus.magnifyingglass")
+      }
+      .buttonStyle(.bordered)
+      .accessibilityIdentifier("canvas-zoom-out")
+      Button("Actual Size") {
+        model.resetCanvasZoom()
+      }
+      .buttonStyle(.bordered)
+      .accessibilityIdentifier("canvas-zoom-reset")
+      Button {
+        model.zoomIn()
+      } label: {
+        Label("Zoom In", systemImage: "plus.magnifyingglass")
+      }
+      .buttonStyle(.bordered)
+      .accessibilityIdentifier("canvas-zoom-in")
       Button("Refresh All") {
         model.refreshAllViewports()
       }
       .buttonStyle(.bordered)
+      Button {
+        model.toggleInspector()
+      } label: {
+        Label(model.isInspectorCollapsed ? "Show Panel" : "Hide Panel", systemImage: "sidebar.right")
+      }
+      .buttonStyle(.bordered)
+      .accessibilityIdentifier("inspector-toggle")
       Button("Project Settings") {
         model.showProjectSettings = true
       }
@@ -1349,19 +2005,33 @@ struct CanvasGridView: View {
   }
 }
 
+struct EmptyCanvasProbeView: View {
+  var body: some View {
+    AccessibilityMarkerView(
+      identifier: "canvas-empty-probe",
+      label: "Canvas Empty Probe"
+    )
+      .frame(width: 96, height: 96)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+}
+
 struct ViewportCardView: View {
   @EnvironmentObject private var model: LoopBrowserModel
   @ObservedObject var controller: ViewportController
-  @State private var dragOrigin: ViewportFrame?
-  @State private var resizeOrigin: ViewportFrame?
+  let index: Int
 
   var body: some View {
     VStack(spacing: 0) {
       header
-      ZStack(alignment: .bottomTrailing) {
-        EmbeddedViewportWebView(controller: controller)
-          .frame(width: CGFloat(controller.frame.width), height: CGFloat(controller.frame.height - 46))
-        resizeHandle
+      ZStack {
+        EmbeddedViewportWebView(
+          controller: controller,
+          accessibilityIdentifier: "viewport-native-web-\(index)"
+        )
+          .frame(width: CGFloat(controller.frame.width), height: CGFloat(controller.frame.height - CanvasUI.headerHeight))
+        Color.clear
+          .allowsHitTesting(false)
       }
     }
     .frame(width: CGFloat(controller.frame.width), height: CGFloat(controller.frame.height))
@@ -1378,22 +2048,62 @@ struct ViewportCardView: View {
           lineWidth: model.selectedViewportID == controller.id ? 2 : 1
         )
     )
+    .overlay(alignment: .top) { alignedResizeHandle(.top) }
+    .overlay(alignment: .bottom) { alignedResizeHandle(.bottom) }
+    .overlay(alignment: .leading) { alignedResizeHandle(.left) }
+    .overlay(alignment: .trailing) { alignedResizeHandle(.right) }
+    .overlay(alignment: .topLeading) { alignedResizeHandle(.topLeft) }
+    .overlay(alignment: .topTrailing) { alignedResizeHandle(.topRight) }
+    .overlay(alignment: .bottomLeading) { alignedResizeHandle(.bottomLeft) }
+    .overlay(alignment: .bottomTrailing) { alignedResizeHandle(.bottomRight) }
+    .overlay(alignment: .top) {
+      AccessibilityMarkerView(
+        identifier: "viewport-header-\(index)",
+        label: "\(controller.label) Header"
+      )
+      .frame(height: CanvasUI.headerHeight)
+    }
+    .overlay {
+      AccessibilityMarkerView(
+        identifier: "viewport-card-\(index)",
+        label: controller.label,
+        value: model.selectedViewportID == controller.id ? "selected" : "unselected"
+      )
+    }
     .shadow(color: Color.black.opacity(0.14), radius: 20, x: 0, y: 14)
   }
 
   private var header: some View {
     HStack(spacing: 10) {
-      Circle()
-        .fill(statusColor)
-        .frame(width: 10, height: 10)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(controller.label)
-          .font(.system(size: 13, weight: .semibold))
-          .lineLimit(1)
-        Text(controller.currentURLString)
-          .font(.system(size: 11))
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
+      HStack(spacing: 10) {
+        Circle()
+          .fill(statusColor)
+          .frame(width: 10, height: 10)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(controller.label)
+            .font(.system(size: 13, weight: .semibold))
+            .lineLimit(1)
+          Text(controller.currentURLString)
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+        Spacer(minLength: 0)
+      }
+      .padding(.trailing, 18)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .overlay(alignment: .leading) {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .fill(Color.black.opacity(0.001))
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+          .overlay(alignment: .leading) {
+            HStack(spacing: 4) {
+              Capsule(style: .continuous).fill(Color.black.opacity(0.12)).frame(width: 4, height: 20)
+              Capsule(style: .continuous).fill(Color.black.opacity(0.12)).frame(width: 4, height: 20)
+            }
+            .padding(.leading, 6)
+          }
+          .allowsHitTesting(false)
       }
       Spacer()
       if model.canUseAgentLogin(on: controller) {
@@ -1403,6 +2113,20 @@ struct ViewportCardView: View {
         .buttonStyle(.bordered)
         .controlSize(.small)
       }
+      Button {
+        controller.goBack()
+      } label: {
+        Image(systemName: "chevron.backward")
+      }
+      .buttonStyle(.plain)
+      .disabled(!controller.canGoBack)
+      Button {
+        controller.goForward()
+      } label: {
+        Image(systemName: "chevron.forward")
+      }
+      .buttonStyle(.plain)
+      .disabled(!controller.canGoForward)
       Button {
         model.refreshViewport(viewportID: controller.id)
       } label: {
@@ -1429,52 +2153,84 @@ struct ViewportCardView: View {
       )
     )
     .contentShape(Rectangle())
-    .gesture(
-      DragGesture()
-        .onChanged { value in
-          if dragOrigin == nil {
-            dragOrigin = controller.frame
-          }
-          guard let origin = dragOrigin else { return }
-          controller.frame.x = origin.x + Double(value.translation.width / model.canvasScale)
-          controller.frame.y = origin.y + Double(value.translation.height / model.canvasScale)
-        }
-        .onEnded { _ in
-          dragOrigin = nil
-          model.selectedViewportID = controller.id
-          model.persistWorkspaceState()
-          model.recordAction("Viewport", detail: "Moved \(controller.label)", success: true)
-        }
-    )
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("\(controller.label) Header")
   }
 
-  private var resizeHandle: some View {
-    RoundedRectangle(cornerRadius: 8, style: .continuous)
-      .fill((Color(hex: model.projectConfig.chrome.accentColor) ?? .blue).opacity(0.88))
-      .frame(width: 18, height: 18)
-      .overlay(
-        Image(systemName: "arrow.up.left.and.arrow.down.right")
-          .font(.system(size: 8, weight: .bold))
-          .foregroundStyle(.white)
+  private func alignedResizeHandle(_ handle: ViewportResizeHandle) -> some View {
+    resizeHandle(for: handle)
+      .offset(handleOverlayOffset(for: handle))
+  }
+
+  private func resizeHandle(for handle: ViewportResizeHandle) -> some View {
+    let accentColor = Color(hex: model.projectConfig.chrome.accentColor) ?? .blue
+
+    return ZStack {
+      RoundedRectangle(cornerRadius: 7, style: .continuous)
+        .fill(.white.opacity(0.001))
+      resizeIndicator(for: handle, accentColor: accentColor)
+      AccessibilityMarkerView(
+        identifier: "viewport-resize-\(handle.accessibilityName)-\(index)",
+        label: "\(controller.label) \(handle.accessibilityName) Resize Handle"
       )
-      .padding(10)
-      .contentShape(Rectangle())
-      .gesture(
-        DragGesture()
-          .onChanged { value in
-            if resizeOrigin == nil {
-              resizeOrigin = controller.frame
-            }
-            guard let origin = resizeOrigin else { return }
-            controller.frame.width = max(320, origin.width + Double(value.translation.width / model.canvasScale))
-            controller.frame.height = max(240, origin.height + Double(value.translation.height / model.canvasScale))
-          }
-          .onEnded { _ in
-            resizeOrigin = nil
-            model.persistWorkspaceState()
-            model.recordAction("Viewport", detail: "Resized \(controller.label)", success: true)
-          }
-      )
+    }
+    .frame(width: handleSize(for: handle).width, height: handleSize(for: handle).height)
+    .contentShape(Rectangle())
+    .allowsHitTesting(false)
+  }
+
+  private func resizeIndicator(for handle: ViewportResizeHandle, accentColor: Color) -> some View {
+    Group {
+      if handle.showsHorizontalIndicator {
+        Capsule(style: .continuous)
+          .fill(accentColor.opacity(0.88))
+          .frame(width: 30, height: 4)
+      } else if handle.showsVerticalIndicator {
+        Capsule(style: .continuous)
+          .fill(accentColor.opacity(0.88))
+          .frame(width: 4, height: 30)
+      } else {
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+          .fill(accentColor.opacity(0.9))
+          .frame(width: 14, height: 14)
+          .overlay(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+              .strokeBorder(.white.opacity(0.8), lineWidth: 1)
+          )
+      }
+    }
+  }
+
+  private func handleSize(for handle: ViewportResizeHandle) -> CGSize {
+    switch handle {
+    case .top, .bottom:
+      return CGSize(width: 72, height: 20)
+    case .left, .right:
+      return CGSize(width: 20, height: 72)
+    case .topLeft, .topRight, .bottomLeft, .bottomRight:
+      return CGSize(width: 24, height: 24)
+    }
+  }
+
+  private func handleOverlayOffset(for handle: ViewportResizeHandle) -> CGSize {
+    switch handle {
+    case .top:
+      return CGSize(width: 0, height: -2)
+    case .bottom:
+      return CGSize(width: 0, height: 2)
+    case .left:
+      return CGSize(width: -2, height: 0)
+    case .right:
+      return CGSize(width: 2, height: 0)
+    case .topLeft:
+      return CGSize(width: -2, height: -2)
+    case .topRight:
+      return CGSize(width: 2, height: -2)
+    case .bottomLeft:
+      return CGSize(width: -2, height: 2)
+    case .bottomRight:
+      return CGSize(width: 2, height: 2)
+    }
   }
 
   private var statusColor: Color {
@@ -1507,6 +2263,12 @@ struct InspectorSidebar: View {
       .padding(18)
     }
     .background(.ultraThinMaterial)
+    .overlay {
+      AccessibilityMarkerView(
+        identifier: "inspector-sidebar",
+        label: "Inspector Sidebar"
+      )
+    }
   }
 
   private var assistantPanel: some View {
@@ -1808,6 +2570,29 @@ extension View {
   }
 }
 
+private extension ViewportResizeHandle {
+  var accessibilityName: String {
+    switch self {
+    case .top:
+      return "top"
+    case .bottom:
+      return "bottom"
+    case .left:
+      return "left"
+    case .right:
+      return "right"
+    case .topLeft:
+      return "top-left"
+    case .topRight:
+      return "top-right"
+    case .bottomLeft:
+      return "bottom-left"
+    case .bottomRight:
+      return "bottom-right"
+    }
+  }
+}
+
 @main
 struct LoopBrowserNativeApp: App {
   @StateObject private var model = LoopBrowserModel()
@@ -1820,6 +2605,24 @@ struct LoopBrowserNativeApp: App {
           model.startServices()
         }
         .frame(minWidth: 1280, minHeight: 820)
+    }
+    .commands {
+      CommandMenu("Canvas") {
+        Button("Zoom In") {
+          model.zoomIn()
+        }
+        .keyboardShortcut("+", modifiers: [.command])
+
+        Button("Zoom Out") {
+          model.zoomOut()
+        }
+        .keyboardShortcut("-", modifiers: [.command])
+
+        Button("Actual Size") {
+          model.resetCanvasZoom()
+        }
+        .keyboardShortcut("0", modifiers: [.command])
+      }
     }
   }
 }

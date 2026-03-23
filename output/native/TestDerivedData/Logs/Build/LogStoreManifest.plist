@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>logFormatVersion</key>
+	<integer>12</integer>
+	<key>logs</key>
+	<dict>
+		<key>49E89B3F-1BE1-4F4C-98F8-075A1252FE46</key>
+		<dict>
+			<key>className</key>
+			<string>IDECommandLineBuildLog</string>
+			<key>documentTypeString</key>
+			<string>&lt;nil&gt;</string>
+			<key>domainType</key>
+			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
+			<key>fileName</key>
+			<string>49E89B3F-1BE1-4F4C-98F8-075A1252FE46.xcactivitylog</string>
+			<key>hasPrimaryLog</key>
+			<true/>
+			<key>primaryObservable</key>
+			<dict>
+				<key>highLevelStatus</key>
+				<string>S</string>
+				<key>totalNumberOfAnalyzerIssues</key>
+				<integer>0</integer>
+				<key>totalNumberOfErrors</key>
+				<integer>0</integer>
+				<key>totalNumberOfTestFailures</key>
+				<integer>0</integer>
+				<key>totalNumberOfWarnings</key>
+				<integer>0</integer>
+			</dict>
+			<key>schemeIdentifier-containerName</key>
+			<string>LoopBrowserNative project</string>
+			<key>schemeIdentifier-schemeName</key>
+			<string>LoopBrowserNative</string>
+			<key>schemeIdentifier-sharedScheme</key>
+			<integer>1</integer>
+			<key>signature</key>
+			<string>Testing project LoopBrowserNative with scheme LoopBrowserNative</string>
+			<key>timeStartedRecording</key>
+			<real>795982011.92505801</real>
+			<key>timeStoppedRecording</key>
+			<real>795982014.19307697</real>
+			<key>title</key>
+			<string>Testing project LoopBrowserNative with scheme LoopBrowserNative</string>
+			<key>uniqueIdentifier</key>
+			<string>49E89B3F-1BE1-4F4C-98F8-075A1252FE46</string>
+		</dict>
+		<key>A842EB45-72EF-47D1-89A0-5818DD2E9210</key>
+		<dict>
+			<key>className</key>
+			<string>IDECommandLineBuildLog</string>
+			<key>documentTypeString</key>
+			<string>&lt;nil&gt;</string>
+			<key>domainType</key>
+			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
+			<key>fileName</key>
+			<string>A842EB45-72EF-47D1-89A0-5818DD2E9210.xcactivitylog</string>
+			<key>hasPrimaryLog</key>
+			<true/>
+			<key>primaryObservable</key>
+			<dict>
+				<key>highLevelStatus</key>
+				<string>S</string>
+				<key>totalNumberOfAnalyzerIssues</key>
+				<integer>0</integer>
+				<key>totalNumberOfErrors</key>
+				<integer>0</integer>
+				<key>totalNumberOfTestFailures</key>
+				<integer>0</integer>
+				<key>totalNumberOfWarnings</key>
+				<integer>0</integer>
+			</dict>
+			<key>schemeIdentifier-containerName</key>
+			<string>LoopBrowserNative project</string>
+			<key>schemeIdentifier-schemeName</key>
+			<string>LoopBrowserNative</string>
+			<key>schemeIdentifier-sharedScheme</key>
+			<integer>1</integer>
+			<key>signature</key>
+			<string>Testing project LoopBrowserNative with scheme LoopBrowserNative</string>
+			<key>timeStartedRecording</key>
+			<real>795836551.14586103</real>
+			<key>timeStoppedRecording</key>
+			<real>795836552.41033494</real>
+			<key>title</key>
+			<string>Testing project LoopBrowserNative with scheme LoopBrowserNative</string>
+			<key>uniqueIdentifier</key>
+			<string>A842EB45-72EF-47D1-89A0-5818DD2E9210</string>
+		</dict>
+	</dict>
+</dict>
+</plist>

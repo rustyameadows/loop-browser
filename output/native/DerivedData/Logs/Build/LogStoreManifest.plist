@@ -5,6 +5,49 @@
 	<key>logFormatVersion</key>
 	<integer>12</integer>
 	<key>logs</key>
-	<dict/>
+	<dict>
+		<key>0BEB9C90-3165-4ADC-8CCA-EABA938C1523</key>
+		<dict>
+			<key>className</key>
+			<string>IDECommandLineBuildLog</string>
+			<key>documentTypeString</key>
+			<string>&lt;nil&gt;</string>
+			<key>domainType</key>
+			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
+			<key>fileName</key>
+			<string>0BEB9C90-3165-4ADC-8CCA-EABA938C1523.xcactivitylog</string>
+			<key>hasPrimaryLog</key>
+			<true/>
+			<key>primaryObservable</key>
+			<dict>
+				<key>highLevelStatus</key>
+				<string>W</string>
+				<key>totalNumberOfAnalyzerIssues</key>
+				<integer>0</integer>
+				<key>totalNumberOfErrors</key>
+				<integer>0</integer>
+				<key>totalNumberOfTestFailures</key>
+				<integer>0</integer>
+				<key>totalNumberOfWarnings</key>
+				<integer>10</integer>
+			</dict>
+			<key>schemeIdentifier-containerName</key>
+			<string>LoopBrowserNative project</string>
+			<key>schemeIdentifier-schemeName</key>
+			<string>LoopBrowserNative</string>
+			<key>schemeIdentifier-sharedScheme</key>
+			<integer>1</integer>
+			<key>signature</key>
+			<string>Testing project LoopBrowserNative with scheme LoopBrowserNative</string>
+			<key>timeStartedRecording</key>
+			<real>795985728.47906303</real>
+			<key>timeStoppedRecording</key>
+			<real>795985762.68361998</real>
+			<key>title</key>
+			<string>Testing project LoopBrowserNative with scheme LoopBrowserNative</string>
+			<key>uniqueIdentifier</key>
+			<string>0BEB9C90-3165-4ADC-8CCA-EABA938C1523</string>
+		</dict>
+	</dict>
 </dict>
 </plist>

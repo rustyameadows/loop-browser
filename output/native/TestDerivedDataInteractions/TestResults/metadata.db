@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>FormatVersion</key>
+	<integer>1</integer>
+	<key>Store</key>
+	<dict>
+		<key>LoopBrowserNativeUITests</key>
+		<dict>
+			<key>LoopBrowserNativeUITests</key>
+			<dict>
+				<key>testEmptyCanvasClickClearsSelection</key>
+				<dict>
+					<key>mrnet</key>
+					<real>10.421342968940735</real>
+				</dict>
+				<key>testResizeHandlesRespectAxisRulesAndShiftMirror</key>
+				<dict>
+					<key>mrnet</key>
+					<real>19.947606921195984</real>
+				</dict>
+				<key>testViewportHeaderDragMovesViewport</key>
+				<dict>
+					<key>mrnet</key>
+					<real>13.22999906539917</real>
+				</dict>
+			</dict>
+		</dict>
+	</dict>
+</dict>
+</plist>
