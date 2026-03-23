@@ -380,6 +380,8 @@
                   placeholder="Type into the viewport"
                   type="text"
                 />
+                <p id="focus-status">Input Focus: blurred</p>
+                <p id="last-action">Last Action: ready</p>
               </article>
             </div>
           </section>
@@ -447,6 +449,8 @@
         const variantBadge = document.getElementById("fixture-variant-badge");
         const variantDetail = document.getElementById("variant-detail");
         const description = document.getElementById("fixture-description");
+        const focusStatus = document.getElementById("focus-status");
+        const lastAction = document.getElementById("last-action");
 
         if (variant === "secondary") {
           variantBadge.textContent = "Variant: Secondary Review";
@@ -463,6 +467,16 @@
         document.getElementById("increment-button").addEventListener("click", () => {
           count += 1;
           counter.textContent = `Counter: ${count}`;
+          lastAction.textContent = "Last Action: counter-click";
+        });
+
+        const fixtureInput = document.getElementById("fixture-input");
+        fixtureInput.addEventListener("focus", () => {
+          focusStatus.textContent = "Input Focus: focused";
+          lastAction.textContent = "Last Action: input-focus";
+        });
+        fixtureInput.addEventListener("blur", () => {
+          focusStatus.textContent = "Input Focus: blurred";
         });
 
         const dragSurface = document.getElementById("drag-surface");
@@ -516,6 +530,7 @@
           state.currentX = clamp(state.originX + (event.clientX - state.startPointerX), 16, maxX);
           state.currentY = clamp(state.originY + (event.clientY - state.startPointerY), 16, maxY);
           applyDragPosition();
+          lastAction.textContent = "Last Action: card-drag";
         });
 
         function endDrag(event) {

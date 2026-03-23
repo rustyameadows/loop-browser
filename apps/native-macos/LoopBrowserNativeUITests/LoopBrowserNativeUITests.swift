@@ -40,10 +40,9 @@ final class LoopBrowserNativeUITests: XCTestCase {
     app.launchEnvironment["LOOP_BROWSER_APP_SUPPORT_DIR"] = testAppSupportDirectory.path
     app.launch()
 
-    _ = requireOtherElement("viewport-card-0", timeout: 10)
-    _ = requireOtherElement("viewport-card-1", timeout: 10)
+    waitForViewportChrome(index: 0)
+    waitForViewportChrome(index: 1, includeRightResizeHandle: true)
     _ = requireOtherElement("canvas-interaction-surface", timeout: 10)
-    _ = requireOtherElement("inspector-sidebar", timeout: 10)
     _ = waitForWorkspaceState(timeout: 10) { state in
       state.viewports.count == 2
     }
@@ -63,6 +62,7 @@ final class LoopBrowserNativeUITests: XCTestCase {
       ),
       40
     )
+    assertFixtureFocusStatus(index: 0, status: "blurred")
 
     let beforeMove = viewportCardFrame(index: 0)
     let afterMove = dragViewportHeader(index: 0, delta: CGVector(dx: 156, dy: 96))
@@ -135,6 +135,7 @@ final class LoopBrowserNativeUITests: XCTestCase {
     XCTAssertGreaterThan(abs(finalState.viewports[1].frame.y - resizedState.viewports[1].frame.y), 60)
 
     clickIncrementButton(index: 0, expectedCount: 1)
+    dragFixtureCard(index: 0)
   }
 
   private var nativeMacOSRoot: URL {
@@ -185,6 +186,8 @@ final class LoopBrowserNativeUITests: XCTestCase {
 
     let typedValue = textField.value as? String ?? ""
     XCTAssertTrue(typedValue.contains(text))
+    assertFixtureFocusStatus(index: index, status: "focused")
+    assertFixtureLastAction(index: index, action: "input-focus")
   }
 
   private func clickIncrementButton(index: Int, expectedCount: Int) {
@@ -193,6 +196,17 @@ final class LoopBrowserNativeUITests: XCTestCase {
     XCTAssertTrue(incrementButton.waitForExistence(timeout: 5))
     incrementButton.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
     XCTAssertTrue(webView.staticTexts["Counter: \(expectedCount)"].waitForExistence(timeout: 5))
+    assertFixtureLastAction(index: index, action: "counter-click")
+  }
+
+  private func dragFixtureCard(index: Int) {
+    let webView = requireWebView(labeled: viewportLabel(for: index))
+    let dragCard = webView.otherElements["Drag Sample Card"].firstMatch
+    XCTAssertTrue(dragCard.waitForExistence(timeout: 5))
+    let start = dragCard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+    let end = start.withOffset(CGVector(dx: 84, dy: 58))
+    start.press(forDuration: 0.05, thenDragTo: end)
+    assertFixtureLastAction(index: index, action: "card-drag")
   }
 
   @discardableResult
@@ -201,7 +215,8 @@ final class LoopBrowserNativeUITests: XCTestCase {
     minimumDistance: Double
   ) -> UITestWorkspaceState {
     let before = try! XCTUnwrap(workspaceState())
-    let startPoint = emptyCanvasScreenPoint()
+    let excludedFrames = (0..<before.viewports.count).map { viewportCardFrame(index: $0) }
+    let startPoint = safeEmptyCanvasScreenPoint(excluding: excludedFrames)
     let start = surfaceCoordinate(forScreenPoint: startPoint)
     let end = surfaceCoordinate(
       forScreenPoint: CGPoint(x: startPoint.x + translation.dx, y: startPoint.y + translation.dy)
@@ -220,15 +235,9 @@ final class LoopBrowserNativeUITests: XCTestCase {
   @discardableResult
   private func dragViewportHeader(index: Int, delta: CGVector) -> CGRect {
     let before = viewportCardFrame(index: index)
-    let startPoint = CGPoint(
-      x: before.minX + before.width * 0.24,
-      y: before.minY + 20
-    )
-    let start = surfaceCoordinate(forScreenPoint: startPoint)
-    let end = surfaceCoordinate(
-      forScreenPoint: CGPoint(x: startPoint.x + delta.dx, y: startPoint.y + delta.dy)
-    )
-
+    let header = requireOtherElement("viewport-header-\(index)")
+    let start = header.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+    let end = start.withOffset(delta)
     start.press(forDuration: 0.05, thenDragTo: end)
 
     return waitForOtherElementFrame(identifier: "viewport-card-\(index)", timeout: 10) { frame in
@@ -240,19 +249,9 @@ final class LoopBrowserNativeUITests: XCTestCase {
   @discardableResult
   private func resizeViewportRight(index: Int, deltaX: CGFloat) -> CGRect {
     let before = viewportCardFrame(index: index)
-    let start = surfaceCoordinate(
-      forScreenPoint: CGPoint(
-        x: before.maxX + 4,
-        y: before.midY
-      )
-    )
-    let end = surfaceCoordinate(
-      forScreenPoint: CGPoint(
-        x: before.maxX + 4 + deltaX,
-        y: before.midY
-      )
-    )
-
+    let handle = requireOtherElement("viewport-resize-right-\(index)")
+    let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+    let end = start.withOffset(CGVector(dx: deltaX, dy: 0))
     start.press(forDuration: 0.05, thenDragTo: end)
 
     return waitForOtherElementFrame(identifier: "viewport-card-\(index)", timeout: 10) { frame in
@@ -301,12 +300,29 @@ final class LoopBrowserNativeUITests: XCTestCase {
     index == 0 ? "Primary View" : "Secondary View"
   }
 
-  private func emptyCanvasScreenPoint() -> CGPoint {
+  private func safeEmptyCanvasScreenPoint(excluding frames: [CGRect]) -> CGPoint {
     let surfaceFrame = requireOtherElement("canvas-interaction-surface").frame
-    return CGPoint(
-      x: surfaceFrame.minX + 72,
-      y: surfaceFrame.minY + 120
-    )
+    let candidatePoints = [
+      CGPoint(x: surfaceFrame.minX + 72, y: surfaceFrame.minY + 120),
+      CGPoint(x: surfaceFrame.maxX - 72, y: surfaceFrame.minY + 120),
+      CGPoint(x: surfaceFrame.minX + 72, y: surfaceFrame.maxY - 120),
+      CGPoint(x: surfaceFrame.maxX - 72, y: surfaceFrame.maxY - 120),
+      CGPoint(x: surfaceFrame.midX, y: surfaceFrame.minY + 120),
+      CGPoint(x: surfaceFrame.midX, y: surfaceFrame.maxY - 120),
+      CGPoint(x: surfaceFrame.minX + 120, y: surfaceFrame.midY),
+      CGPoint(x: surfaceFrame.maxX - 120, y: surfaceFrame.midY),
+    ]
+    let expandedFrames = frames.map { $0.insetBy(dx: -20, dy: -20) }
+    let safeSurfaceFrame = surfaceFrame.insetBy(dx: 40, dy: 40)
+
+    if let point = candidatePoints.first(where: { point in
+      safeSurfaceFrame.contains(point) && !expandedFrames.contains(where: { $0.contains(point) })
+    }) {
+      return point
+    }
+
+    XCTFail("Could not find an empty canvas point outside current viewport frames")
+    return CGPoint(x: surfaceFrame.minX + 72, y: surfaceFrame.minY + 120)
   }
 
   private func waitForNonExistence(of element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
@@ -375,6 +391,14 @@ final class LoopBrowserNativeUITests: XCTestCase {
     requireOtherElement("viewport-card-\(index)").frame
   }
 
+  private func waitForViewportChrome(index: Int, includeRightResizeHandle: Bool = false) {
+    _ = requireOtherElement("viewport-card-\(index)", timeout: 10)
+    _ = requireOtherElement("viewport-header-\(index)", timeout: 10)
+    if includeRightResizeHandle {
+      _ = requireOtherElement("viewport-resize-right-\(index)", timeout: 10)
+    }
+  }
+
   private func surfaceCoordinate(forScreenPoint screenPoint: CGPoint) -> XCUICoordinate {
     let surface = requireOtherElement("canvas-interaction-surface")
     let frame = surface.frame
@@ -412,6 +436,22 @@ final class LoopBrowserNativeUITests: XCTestCase {
     XCTAssertTrue(element.waitForExistence(timeout: timeout), "Expected web view labeled \(label) to exist")
     XCTAssertEqual(query.count, 1, "Expected exactly one web view labeled \(label)")
     return element
+  }
+
+  private func assertFixtureFocusStatus(index: Int, status: String, timeout: TimeInterval = 5) {
+    let webView = requireWebView(labeled: viewportLabel(for: index))
+    XCTAssertTrue(
+      webView.staticTexts["Input Focus: \(status)"].waitForExistence(timeout: timeout),
+      "Expected fixture input focus status \(status)"
+    )
+  }
+
+  private func assertFixtureLastAction(index: Int, action: String, timeout: TimeInterval = 5) {
+    let webView = requireWebView(labeled: viewportLabel(for: index))
+    XCTAssertTrue(
+      webView.staticTexts["Last Action: \(action)"].waitForExistence(timeout: timeout),
+      "Expected fixture last action \(action)"
+    )
   }
 
   private func workspaceStateFileURL() -> URL {
