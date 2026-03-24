@@ -212,6 +212,9 @@ Expected shareable settings in `.loop-browser.json`:
 - `chrome.accentColor`
 - `chrome.projectIconPath`
 - `startup.defaultUrl`
+- optional `startup.server.command`
+- optional `startup.server.workingDirectory`
+- optional `startup.server.readyUrl`
 - optional panel or workspace presentation preferences
 - legacy env fallback names only if still supported during transition
 
@@ -220,6 +223,7 @@ Expected repo-local settings in `.loop-browser.local.json`:
 - `version`
 - `agentLogin.username`
 - `agentLogin.password`
+- optional `server.environment`
 
 ## Subsystem implementation plan
 

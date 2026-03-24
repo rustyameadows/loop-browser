@@ -43,8 +43,17 @@ Example `.loop-browser.json`:
 ```json
 {
   "version": 1,
+  "chrome": {
+    "chromeColor": "#FAFBFD",
+    "accentColor": "#0A84FF",
+    "projectIconPath": null
+  },
   "startup": {
-    "defaultUrl": "http://127.0.0.1:3000"
+    "defaultUrl": "http://127.0.0.1:3000",
+    "server": {
+      "command": "bin/dev",
+      "readyUrl": "http://127.0.0.1:3000"
+    }
   }
 }
 ```
@@ -54,6 +63,11 @@ Example `.loop-browser.local.json`:
 ```json
 {
   "version": 1,
+  "server": {
+    "environment": {
+      "PORT": "3000"
+    }
+  },
   "agentLogin": {
     "username": "dev@example.com",
     "password": "password123"
@@ -63,14 +77,67 @@ Example `.loop-browser.local.json`:
 
 In `Project Settings`:
 
-- Set `Default URL`, optional colors, and optional project icon path, then click `Save Appearance`.
+- Set `Default URL`, optional colors, and optional project icon path, then click `Save Project Settings`.
+- Set `Server Command`, optional `Working Directory`, and optional `Ready URL`, then click `Save Project Settings`.
 - Enter `Agent login email or username` and `Agent login password`, then click `Save Login`.
 - On matching login pages for that saved `Default URL` origin, `Use Agent Login` fills the visible
   login form without submitting it.
 
+In the inspector `Project` card:
+
+- Click `Start Server` to run the configured local command for the current project.
+- Click `Stop` or `Restart` to manage the current project server without leaving the app.
+- Watch the server status and recent output in the same card.
+
 Legacy env-based login is still supported through `agentLogin.usernameEnv` and
 `agentLogin.passwordEnv` in `.loop-browser.json`, but repo-local saved login is the preferred
 workflow.
+
+## Project Server Examples
+
+Rails app:
+
+```json
+{
+  "version": 1,
+  "chrome": {
+    "chromeColor": "#FAFBFD",
+    "accentColor": "#0A84FF",
+    "projectIconPath": null
+  },
+  "startup": {
+    "defaultUrl": "http://127.0.0.1:3000",
+    "server": {
+      "command": "bin/dev",
+      "readyUrl": "http://127.0.0.1:3000"
+    }
+  }
+}
+```
+
+Static site:
+
+```json
+{
+  "version": 1,
+  "chrome": {
+    "chromeColor": "#FAFBFD",
+    "accentColor": "#0A84FF",
+    "projectIconPath": null
+  },
+  "startup": {
+    "defaultUrl": "http://127.0.0.1:3000/interactive-fixture.html",
+    "server": {
+      "command": "/usr/bin/python3 -m http.server 3000",
+      "readyUrl": "http://127.0.0.1:3000"
+    }
+  }
+}
+```
+
+Use `.loop-browser.local.json` for repo-local environment values or secrets that should not be
+checked in. If `readyUrl` is omitted, Loop Browser falls back to `startup.defaultUrl` when
+checking whether the server is live.
 
 ## MCP Integration
 

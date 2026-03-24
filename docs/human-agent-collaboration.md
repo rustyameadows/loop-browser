@@ -35,14 +35,15 @@ The goal is to remove ambiguity, not add another comment system.
 ## Standard workflow
 
 1. The human opens the project folder in Loop Browser.
-2. The human sets `Default URL` and any project identity details in `Project Settings`.
-3. The human opens one or more viewports for the routes, sizes, or states that matter.
-4. If the app is login-gated, the human saves repo-local credentials and uses `Use Agent Login`.
-5. The agent connects through the local MCP server and reads the current session or workspace
+2. The human sets `Default URL`, any project identity details, and optional local server settings in `Project Settings`.
+3. If the project needs a local dev server, the human clicks `Start Server` from the `Project` card and waits for it to become ready.
+4. The human opens one or more viewports for the routes, sizes, or states that matter.
+5. If the app is login-gated, the human saves repo-local credentials and uses `Use Agent Login`.
+6. The agent connects through the local MCP server and reads the current session or workspace
    state.
-6. The agent opens or updates viewports as needed, edits project files when needed, and refreshes
+7. The agent opens or updates viewports as needed, edits project files when needed, and refreshes
    affected viewports.
-7. The human reviews the result directly on the canvas and checks the action log for what changed.
+8. The human reviews the result directly on the canvas and checks the action log for what changed.
 
 ## Login-gated apps
 
@@ -50,14 +51,15 @@ If the app under discussion has a login screen, set up the project before starti
 workflow:
 
 1. Open `Project Settings`.
-2. Set `Default URL` to the local app origin and click `Save Appearance`.
+2. Set `Default URL` to the local app origin and click `Save Project Settings`.
 3. Enter the repo-local `Agent login email or username` and `Agent login password`, then click `Save Login`.
 4. Navigate to the login page for that same origin.
 5. Click `Use Agent Login` to fill the visible username/password fields without submitting the form.
 
 The saved credentials live in `.loop-browser.local.json` in the project root and are intended to
 stay repo-local. The shareable `.loop-browser.json` file should keep only the non-secret project
-settings like `startup.defaultUrl`.
+settings like `startup.defaultUrl` and any checked-in server command. Repo-local server
+environment overrides should stay in `.loop-browser.local.json`.
 
 ## Human workflow
 

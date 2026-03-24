@@ -111,6 +111,8 @@ they provide strong Project identity and local workflow support:
   into shareable Project config.
 - `startup.defaultUrl` defines both the Project startup target and the origin scope for the
   `Use Agent Login` affordance.
+- optional checked-in server startup lives alongside other shareable project settings, while
+  repo-local server environment overrides stay in `.loop-browser.local.json`.
 - theme state includes chrome color, accent color, and an optional Project icon.
 - `Use Agent Login` remains a controlled fill action for visible login forms on matching-origin
   pages and does not auto-submit the form.

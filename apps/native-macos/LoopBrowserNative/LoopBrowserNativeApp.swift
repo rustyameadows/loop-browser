@@ -1,9 +1,11 @@
 import AppKit
 import CryptoKit
+import Darwin
 import SwiftUI
 import WebKit
 
 enum ViewportStatus: String, Codable, CaseIterable {
+  case restoring
   case loading
   case live
   case refreshing
@@ -38,7 +40,14 @@ struct ProjectConfigFile: Codable {
   }
 
   struct Startup: Codable {
+    struct Server: Codable {
+      var command: String
+      var workingDirectory: String?
+      var readyUrl: String?
+    }
+
     var defaultUrl: String?
+    var server: Server?
   }
 
   struct AgentLoginEnv: Codable {
@@ -71,8 +80,17 @@ struct LocalAgentLoginFile: Codable {
     var password: String
   }
 
+  struct Server: Codable {
+    var environment: [String: String]?
+  }
+
   var version: Int
-  var agentLogin: Credentials
+  var agentLogin: Credentials?
+  var server: Server?
+
+  static var `default`: LocalAgentLoginFile {
+    LocalAgentLoginFile(version: 1, agentLogin: nil, server: nil)
+  }
 }
 
 struct SessionSummary: Codable {
@@ -83,12 +101,56 @@ struct SessionSummary: Codable {
   var viewportCount: Int
 }
 
+struct ManagedProjectServerRecord: Codable {
+  var version: Int = 1
+  var rootPID: Int32
+  var processGroupID: Int32?
+  var projectRootPath: String
+  var command: String
+  var workingDirectoryPath: String
+  var readyURL: String?
+  var startedAt: Date
+}
+
 struct ActionLogEntry: Identifiable, Hashable {
   let id = UUID()
   let timestamp = Date()
   let title: String
   let detail: String
   let success: Bool
+}
+
+struct WorkspaceNotice: Identifiable, Equatable {
+  enum Kind: Equatable {
+    case recovery
+    case configuration
+  }
+
+  let id = UUID()
+  var kind: Kind
+  var title: String
+  var detail: String
+  var allowsRetryRestore: Bool = false
+  var allowsResetSavedWorkspace: Bool = false
+}
+
+struct WorkspaceRestoreValidationResult {
+  enum Disposition: Equatable {
+    case restored
+    case quarantined
+  }
+
+  var disposition: Disposition
+  var state: WorkspaceStateFile?
+  var messages: [String]
+
+  static func restored(_ state: WorkspaceStateFile, messages: [String] = []) -> WorkspaceRestoreValidationResult {
+    WorkspaceRestoreValidationResult(disposition: .restored, state: state, messages: messages)
+  }
+
+  static func quarantined(_ reason: String) -> WorkspaceRestoreValidationResult {
+    WorkspaceRestoreValidationResult(disposition: .quarantined, state: nil, messages: [reason])
+  }
 }
 
 struct MCPConnectionInfo {
@@ -189,6 +251,19 @@ func normalizeAddress(_ input: String) throws -> String {
   return URL(string: "https://\(trimmed)")?.absoluteString ?? trimmed
 }
 
+func resolveHTTPReadyURL(_ input: String) throws -> URL {
+  let normalized = try normalizeAddress(input)
+  guard let url = URL(string: normalized),
+        let scheme = url.scheme?.lowercased(),
+        scheme == "http" || scheme == "https"
+  else {
+    throw NSError(domain: "LoopBrowserNative", code: 8, userInfo: [
+      NSLocalizedDescriptionKey: "Ready URL must be an http:// or https:// address.",
+    ])
+  }
+  return url
+}
+
 func deriveProjectSessionSlug(projectRoot: URL) -> String {
   let base = projectRoot.lastPathComponent.lowercased()
     .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
@@ -222,6 +297,244 @@ func workspaceStateURL(projectRoot: URL) -> URL {
   projectWorkspaceDirectory(projectRoot: projectRoot).appendingPathComponent("workspace-state.json")
 }
 
+func managedProjectServerRecordURL(projectRoot: URL) -> URL {
+  projectWorkspaceDirectory(projectRoot: projectRoot).appendingPathComponent("managed-project-server.json")
+}
+
+func quarantinedWorkspaceStateURL(projectRoot: URL, date: Date = Date()) -> URL {
+  let formatter = DateFormatter()
+  formatter.locale = Locale(identifier: "en_US_POSIX")
+  formatter.timeZone = TimeZone(secondsFromGMT: 0)
+  formatter.dateFormat = "yyyyMMdd-HHmmss"
+  let stamp = formatter.string(from: date)
+  return projectWorkspaceDirectory(projectRoot: projectRoot)
+    .appendingPathComponent("workspace-state-\(stamp).invalid-workspace-state.json")
+}
+
+func isProcessAlive(_ pid: Int32) -> Bool {
+  guard pid > 0 else { return false }
+  if Darwin.kill(pid, 0) == 0 {
+    return true
+  }
+  return errno == EPERM
+}
+
+func establishManagedProcessGroup(rootPID: Int32) -> Int32? {
+  guard rootPID > 0 else { return nil }
+  if Darwin.setpgid(rootPID, rootPID) == 0 {
+    return rootPID
+  }
+
+  errno = 0
+  let processGroupID = Darwin.getpgid(rootPID)
+  guard processGroupID > 0, processGroupID == rootPID else {
+    return nil
+  }
+  return processGroupID
+}
+
+func isProcessGroupAlive(_ processGroupID: Int32) -> Bool {
+  guard processGroupID > 0 else { return false }
+  if Darwin.kill(-processGroupID, 0) == 0 {
+    return true
+  }
+  return errno == EPERM
+}
+
+func childProcessIDs(of parentPID: Int32) -> [Int32] {
+  let process = Process()
+  let outputPipe = Pipe()
+  process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+  process.arguments = ["-P", String(parentPID)]
+  process.standardOutput = outputPipe
+  process.standardError = Pipe()
+
+  do {
+    try process.run()
+  } catch {
+    return []
+  }
+
+  process.waitUntilExit()
+  guard process.terminationStatus == 0 else { return [] }
+
+  let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+  let output = String(decoding: data, as: UTF8.self)
+  return output
+    .split(whereSeparator: \.isNewline)
+    .compactMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+}
+
+func descendantProcessIDs(of rootPID: Int32) -> [Int32] {
+  var visited: Set<Int32> = []
+
+  func collect(from pid: Int32) -> [Int32] {
+    guard visited.insert(pid).inserted else { return [] }
+    let children = childProcessIDs(of: pid)
+    var descendants: [Int32] = []
+    for childPID in children {
+      descendants.append(contentsOf: collect(from: childPID))
+      descendants.append(childPID)
+    }
+    return descendants
+  }
+
+  return collect(from: rootPID)
+}
+
+func signalManagedProcessTree(rootPID: Int32, signal: Int32) {
+  for descendantPID in descendantProcessIDs(of: rootPID) {
+    if isProcessAlive(descendantPID) {
+      Darwin.kill(descendantPID, signal)
+    }
+  }
+  if isProcessAlive(rootPID) {
+    Darwin.kill(rootPID, signal)
+  }
+}
+
+func signalManagedServer(processGroupID: Int32?, rootPID: Int32, signal: Int32) {
+  if let processGroupID, isProcessGroupAlive(processGroupID) {
+    Darwin.kill(-processGroupID, signal)
+  }
+  signalManagedProcessTree(rootPID: rootPID, signal: signal)
+}
+
+func waitForManagedServerExit(processGroupID: Int32?, rootPID: Int32, timeout: TimeInterval) -> Bool {
+  let deadline = Date().addingTimeInterval(timeout)
+  repeat {
+    let rootAlive = isProcessAlive(rootPID)
+    let groupAlive = processGroupID.map(isProcessGroupAlive) ?? false
+    if !rootAlive && !groupAlive {
+      return true
+    }
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+  } while Date() < deadline
+
+  return !isProcessAlive(rootPID) && !(processGroupID.map(isProcessGroupAlive) ?? false)
+}
+
+func makeProjectServerURLSession() -> URLSession {
+  let configuration = URLSessionConfiguration.ephemeral
+  configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+  configuration.timeoutIntervalForRequest = 2
+  configuration.timeoutIntervalForResource = 2
+  configuration.waitsForConnectivity = false
+  configuration.connectionProxyDictionary = [:]
+  return URLSession(configuration: configuration)
+}
+
+func validateWorkspaceStateForRestore(
+  _ state: WorkspaceStateFile,
+  canvasCenter: CGPoint = CGPoint(x: 1600, y: 1200)
+) -> WorkspaceRestoreValidationResult {
+  let minimumScale = Double(CanvasInteractionMath.minimumCanvasScale)
+  let maximumScale = Double(CanvasInteractionMath.maximumCanvasScale)
+  let minimumInspectorWidth = 280.0
+  let maximumInspectorWidth = 520.0
+  let maximumAbsoluteOrigin = 100_000.0
+  let minimumViewportWidth = 320.0
+  let maximumViewportWidth = 4_000.0
+  let minimumViewportHeight = 240.0
+  let maximumViewportHeight = 3_000.0
+
+  guard state.canvasScale.isFinite else {
+    return .quarantined("Saved workspace canvas zoom was invalid.")
+  }
+
+  var messages: [String] = []
+  let clampedScale = min(max(state.canvasScale, minimumScale), maximumScale)
+  if abs(clampedScale - state.canvasScale) > 0.0001 {
+    messages.append("Clamped saved canvas zoom.")
+  }
+
+  let sanitizedOffsetX: Double
+  let sanitizedOffsetY: Double
+  if state.canvasOffsetX.isFinite, abs(state.canvasOffsetX) <= maximumAbsoluteOrigin {
+    sanitizedOffsetX = state.canvasOffsetX
+  } else {
+    sanitizedOffsetX = 0
+    messages.append("Reset saved canvas horizontal offset.")
+  }
+  if state.canvasOffsetY.isFinite, abs(state.canvasOffsetY) <= maximumAbsoluteOrigin {
+    sanitizedOffsetY = state.canvasOffsetY
+  } else {
+    sanitizedOffsetY = 0
+    messages.append("Reset saved canvas vertical offset.")
+  }
+
+  let clampedInspectorWidth = min(max(state.inspectorWidth ?? 340, minimumInspectorWidth), maximumInspectorWidth)
+  if let inspectorWidth = state.inspectorWidth, abs(inspectorWidth - clampedInspectorWidth) > 0.0001 {
+    messages.append("Clamped saved inspector width.")
+  }
+
+  var restoredViewports: [ViewportSnapshot] = []
+  var droppedViewportCount = 0
+
+  for snapshot in state.viewports {
+    let frame = snapshot.frame
+    guard frame.x.isFinite, frame.y.isFinite, frame.width.isFinite, frame.height.isFinite else {
+      droppedViewportCount += 1
+      continue
+    }
+
+    let clampedWidth = min(max(frame.width, minimumViewportWidth), maximumViewportWidth)
+    let clampedHeight = min(max(frame.height, minimumViewportHeight), maximumViewportHeight)
+
+    var restoredFrame = ViewportFrame(
+      x: frame.x,
+      y: frame.y,
+      width: clampedWidth,
+      height: clampedHeight
+    )
+
+    if abs(frame.width - clampedWidth) > 0.0001 || abs(frame.height - clampedHeight) > 0.0001 {
+      messages.append("Clamped saved viewport size for \(snapshot.label).")
+    }
+
+    if abs(frame.x) > maximumAbsoluteOrigin || abs(frame.y) > maximumAbsoluteOrigin {
+      restoredFrame = CanvasInteractionMath.spawnedViewportFrame(
+        center: canvasCenter,
+        width: clampedWidth,
+        height: clampedHeight,
+        staggerIndex: restoredViewports.count
+      )
+      messages.append("Recentered saved viewport \(snapshot.label).")
+    }
+
+    let restoredSnapshot = ViewportSnapshot(
+      id: snapshot.id,
+      label: snapshot.label,
+      urlString: snapshot.urlString,
+      frame: restoredFrame,
+      status: snapshot.status,
+      lastRefreshedAt: snapshot.lastRefreshedAt
+    )
+    restoredViewports.append(restoredSnapshot)
+  }
+
+  if !state.viewports.isEmpty, droppedViewportCount * 2 > state.viewports.count {
+    return .quarantined("Saved workspace had too many invalid viewports to restore safely.")
+  }
+
+  if droppedViewportCount > 0 {
+    messages.append("Dropped \(droppedViewportCount) invalid saved viewport(s).")
+  }
+
+  return .restored(
+    WorkspaceStateFile(
+      version: state.version,
+      canvasScale: clampedScale,
+      canvasOffsetX: sanitizedOffsetX,
+      canvasOffsetY: sanitizedOffsetY,
+      viewports: restoredViewports,
+      inspectorCollapsed: state.inspectorCollapsed ?? false,
+      inspectorWidth: clampedInspectorWidth
+    ),
+    messages: messages
+  )
+}
+
 func projectConfigURL(projectRoot: URL) -> URL {
   projectRoot.appendingPathComponent(".loop-browser.json")
 }
@@ -241,6 +554,40 @@ func projectRelativePath(projectRoot: URL, fileURL: URL) throws -> String {
 
   let relative = String(resolvedFile.dropFirst(resolvedRoot.count + 1))
   return "./" + relative
+}
+
+func resolveProjectDirectoryURL(projectRoot: URL, relativePath: String?) throws -> URL {
+  guard let relativePath else {
+    return projectRoot
+  }
+
+  let trimmed = relativePath.replacingOccurrences(of: "\\", with: "/")
+    .trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !trimmed.isEmpty else {
+    return projectRoot
+  }
+  guard !trimmed.hasPrefix("/") else {
+    throw NSError(domain: "LoopBrowserNative", code: 5, userInfo: [
+      NSLocalizedDescriptionKey: "Server working directory must be relative to the current project root.",
+    ])
+  }
+
+  let candidate = projectRoot.appendingPathComponent(trimmed).standardizedFileURL
+  let rootPath = projectRoot.standardizedFileURL.path + "/"
+  guard candidate.path.hasPrefix(rootPath) else {
+    throw NSError(domain: "LoopBrowserNative", code: 6, userInfo: [
+      NSLocalizedDescriptionKey: "Server working directory must stay inside the current project root.",
+    ])
+  }
+
+  var isDirectory: ObjCBool = false
+  guard FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+    throw NSError(domain: "LoopBrowserNative", code: 7, userInfo: [
+      NSLocalizedDescriptionKey: "Server working directory must point to an existing folder inside the current project root.",
+    ])
+  }
+
+  return candidate
 }
 
 func resolvedProjectIconURL(projectRoot: URL, projectIconPath: String?) -> URL? {
@@ -441,6 +788,370 @@ struct NativeLaunchOptions {
 }
 
 @MainActor
+final class ProjectServerController {
+  struct Configuration: Equatable {
+    var projectRoot: URL
+    var command: String
+    var workingDirectory: URL
+    var readyURL: URL?
+    var environment: [String: String]
+  }
+
+  enum Status: String, Equatable {
+    case stopped
+    case starting
+    case running
+    case ready
+    case stopping
+    case failed
+
+    var displayLabel: String {
+      rawValue.capitalized
+    }
+  }
+
+  struct State: Equatable {
+    var status: Status = .stopped
+    var pid: Int32?
+    var lastExitCode: Int32?
+    var lastError: String?
+    var recentOutput: [String] = []
+  }
+
+  enum Event: Equatable {
+    case started(command: String, pid: Int32)
+    case ready(url: URL)
+    case readinessTimedOut(url: URL?)
+    case stopped(exitCode: Int32?, forced: Bool, wasRequested: Bool)
+    case failed(message: String, exitCode: Int32?)
+  }
+
+  var onStateChange: ((State) -> Void)?
+  var onEvent: ((Event) -> Void)?
+
+  private(set) var state = State() {
+    didSet {
+      onStateChange?(state)
+    }
+  }
+
+  private(set) var managedProcessGroupID: Int32?
+
+  private let readyPollInterval: TimeInterval
+  private let readyTimeout: TimeInterval
+  private let terminateTimeout: TimeInterval
+  private let urlSession: URLSession
+
+  private var process: Process?
+  private var outputPipe: Pipe?
+  private var partialOutput = ""
+  private var readyTimer: DispatchSourceTimer?
+  private var readyDeadline: Date?
+  private var readinessRequestInFlight = false
+  private var stopTimeoutWorkItem: DispatchWorkItem?
+  private var currentRunID = 0
+  private var stopRequested = false
+  private var forcedStop = false
+
+  init(
+    urlSession: URLSession = makeProjectServerURLSession(),
+    readyPollInterval: TimeInterval = 0.5,
+    readyTimeout: TimeInterval = 60,
+    terminateTimeout: TimeInterval = 5
+  ) {
+    self.urlSession = urlSession
+    self.readyPollInterval = readyPollInterval
+    self.readyTimeout = readyTimeout
+    self.terminateTimeout = terminateTimeout
+  }
+
+  @discardableResult
+  func start(configuration: Configuration) -> Int32? {
+    invalidate()
+
+    currentRunID += 1
+    let runID = currentRunID
+
+    partialOutput = ""
+    stopRequested = false
+    forcedStop = false
+    readinessRequestInFlight = false
+    state = State(status: configuration.readyURL == nil ? .running : .starting)
+
+    let process = Process()
+    let pipe = Pipe()
+    process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+    process.arguments = ["-lc", configuration.command]
+    process.currentDirectoryURL = configuration.workingDirectory
+    process.environment = configuration.environment
+    process.standardOutput = pipe
+    process.standardError = pipe
+
+    pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+      let data = handle.availableData
+      Task { @MainActor in
+        self?.handleOutputData(data, runID: runID)
+      }
+    }
+
+    process.terminationHandler = { [weak self] terminatedProcess in
+      let exitCode = terminatedProcess.terminationStatus
+      Task { @MainActor in
+        self?.handleProcessTermination(exitCode: exitCode, runID: runID)
+      }
+    }
+
+    do {
+      try process.run()
+    } catch {
+      pipe.fileHandleForReading.readabilityHandler = nil
+      state.status = .failed
+      state.pid = nil
+      state.lastExitCode = nil
+      state.lastError = "Could not start server: \(error.localizedDescription)"
+      onEvent?(.failed(message: state.lastError ?? "Could not start server.", exitCode: nil))
+      return nil
+    }
+
+    self.process = process
+    self.outputPipe = pipe
+    managedProcessGroupID = establishManagedProcessGroup(rootPID: process.processIdentifier)
+    state.pid = process.processIdentifier
+    state.lastExitCode = nil
+    state.lastError = nil
+    onEvent?(.started(command: configuration.command, pid: process.processIdentifier))
+
+    if let readyURL = configuration.readyURL {
+      startReadinessPolling(readyURL: readyURL, runID: runID)
+    }
+
+    return process.processIdentifier
+  }
+
+  func stop() {
+    guard let process else {
+      state.status = .stopped
+      return
+    }
+
+    guard process.isRunning else {
+      cleanupActiveRunResources(resetOutput: false)
+      state.status = .stopped
+      state.pid = nil
+      return
+    }
+
+    stopRequested = true
+    forcedStop = false
+    state.status = .stopping
+    stopReadinessPolling()
+    stopTimeoutWorkItem?.cancel()
+
+    let runID = currentRunID
+    let rootPID = process.processIdentifier
+    let processGroupID = managedProcessGroupID
+    let stopWorkItem = DispatchWorkItem { [weak self] in
+      Task { @MainActor in
+        self?.forceStopIfNeeded(runID: runID, rootPID: rootPID, processGroupID: processGroupID)
+      }
+    }
+    stopTimeoutWorkItem = stopWorkItem
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + terminateTimeout, execute: stopWorkItem)
+    signalManagedServer(processGroupID: processGroupID, rootPID: rootPID, signal: SIGTERM)
+  }
+
+  @discardableResult
+  func invalidate(waitForTermination: Bool = false) -> Bool {
+    currentRunID += 1
+    cleanupActiveRunResources(resetOutput: true)
+    var fullyTerminated = true
+
+    if let process {
+      process.terminationHandler = nil
+      if process.isRunning {
+        let pid = process.processIdentifier
+        let processGroupID = managedProcessGroupID
+        signalManagedServer(processGroupID: processGroupID, rootPID: pid, signal: SIGTERM)
+        if waitForTermination {
+          fullyTerminated = waitForManagedServerExit(processGroupID: processGroupID, rootPID: pid, timeout: terminateTimeout)
+          if !fullyTerminated {
+            signalManagedServer(processGroupID: processGroupID, rootPID: pid, signal: SIGKILL)
+            fullyTerminated = waitForManagedServerExit(processGroupID: processGroupID, rootPID: pid, timeout: 1)
+          }
+        } else {
+          fullyTerminated = false
+          DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) {
+            signalManagedServer(processGroupID: processGroupID, rootPID: pid, signal: SIGKILL)
+          }
+        }
+      }
+    }
+
+    process = nil
+    managedProcessGroupID = nil
+    outputPipe = nil
+    partialOutput = ""
+    readinessRequestInFlight = false
+    stopRequested = false
+    forcedStop = false
+    state = State()
+    return fullyTerminated
+  }
+
+  private func handleOutputData(_ data: Data, runID: Int) {
+    guard runID == currentRunID else { return }
+    guard !data.isEmpty else {
+      outputPipe?.fileHandleForReading.readabilityHandler = nil
+      flushPartialOutput()
+      return
+    }
+
+    let chunk = String(decoding: data, as: UTF8.self)
+    partialOutput.append(chunk)
+
+    var nextLines: [String] = []
+    while let newlineRange = partialOutput.range(of: "\n") {
+      let rawLine = String(partialOutput[..<newlineRange.lowerBound])
+      partialOutput.removeSubrange(partialOutput.startIndex..<newlineRange.upperBound)
+      let line = rawLine.trimmingCharacters(in: .newlines)
+      if !line.isEmpty {
+        nextLines.append(line)
+      }
+    }
+
+    appendLogLines(nextLines)
+  }
+
+  private func handleProcessTermination(exitCode: Int32, runID: Int) {
+    guard runID == currentRunID else { return }
+
+    flushPartialOutput()
+    cleanupActiveRunResources(resetOutput: false)
+
+    let wasRequested = stopRequested
+    let wasForced = forcedStop
+    let message = "Server exited with status \(exitCode)."
+
+    process = nil
+    managedProcessGroupID = nil
+    outputPipe = nil
+    stopRequested = false
+    forcedStop = false
+
+    state.pid = nil
+    state.lastExitCode = exitCode
+
+    if wasRequested {
+      state.status = .stopped
+      state.lastError = nil
+      onEvent?(.stopped(exitCode: exitCode, forced: wasForced, wasRequested: true))
+      return
+    }
+
+    if exitCode == 0 {
+      state.status = .stopped
+      state.lastError = nil
+      onEvent?(.stopped(exitCode: exitCode, forced: false, wasRequested: false))
+      return
+    }
+
+    state.status = .failed
+    state.lastError = message
+    onEvent?(.failed(message: message, exitCode: exitCode))
+  }
+
+  private func startReadinessPolling(readyURL: URL, runID: Int) {
+    stopReadinessPolling()
+    readyDeadline = Date().addingTimeInterval(readyTimeout)
+
+    let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+    timer.schedule(deadline: .now() + readyPollInterval, repeating: readyPollInterval)
+    timer.setEventHandler { [weak self] in
+      Task { @MainActor in
+        self?.pollReadiness(readyURL: readyURL, runID: runID)
+      }
+    }
+    readyTimer = timer
+    timer.resume()
+  }
+
+  private func pollReadiness(readyURL: URL, runID: Int) {
+    guard runID == currentRunID else { return }
+    guard process?.isRunning == true else { return }
+    guard state.status == .starting else { return }
+    guard !readinessRequestInFlight else { return }
+
+    if let readyDeadline, Date() >= readyDeadline {
+      stopReadinessPolling()
+      state.status = .running
+      onEvent?(.readinessTimedOut(url: readyURL))
+      return
+    }
+
+    readinessRequestInFlight = true
+    var request = URLRequest(url: readyURL)
+    request.httpMethod = "GET"
+    request.timeoutInterval = min(max(readyPollInterval, 0.3), 2)
+
+    urlSession.dataTask(with: request) { [weak self] _, response, _ in
+      let isReadyResponse = response is HTTPURLResponse
+      Task { @MainActor in
+        guard let self else { return }
+        self.readinessRequestInFlight = false
+        guard runID == self.currentRunID else { return }
+        guard self.process?.isRunning == true else { return }
+
+        if isReadyResponse {
+          self.stopReadinessPolling()
+          self.state.status = .ready
+          self.state.lastError = nil
+          self.onEvent?(.ready(url: readyURL))
+        }
+      }
+    }
+    .resume()
+  }
+
+  private func stopReadinessPolling() {
+    readyTimer?.cancel()
+    readyTimer = nil
+    readyDeadline = nil
+    readinessRequestInFlight = false
+  }
+
+  private func forceStopIfNeeded(runID: Int, rootPID: Int32, processGroupID: Int32?) {
+    guard runID == currentRunID else { return }
+    guard let process, process.isRunning else { return }
+    forcedStop = true
+    signalManagedServer(processGroupID: processGroupID, rootPID: rootPID, signal: SIGKILL)
+  }
+
+  private func cleanupActiveRunResources(resetOutput: Bool) {
+    stopReadinessPolling()
+    stopTimeoutWorkItem?.cancel()
+    stopTimeoutWorkItem = nil
+    outputPipe?.fileHandleForReading.readabilityHandler = nil
+    if resetOutput {
+      partialOutput = ""
+    }
+  }
+
+  private func flushPartialOutput() {
+    let line = partialOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+    partialOutput = ""
+    appendLogLines(line.isEmpty ? [] : [line])
+  }
+
+  private func appendLogLines(_ lines: [String]) {
+    guard !lines.isEmpty else { return }
+    state.recentOutput.append(contentsOf: lines)
+    if state.recentOutput.count > 200 {
+      state.recentOutput = Array(state.recentOutput.suffix(200))
+    }
+  }
+}
+
+@MainActor
 final class ViewportController: NSObject, ObservableObject, Identifiable, WKNavigationDelegate {
   @Published var label: String
   @Published var currentURLString: String
@@ -451,45 +1162,38 @@ final class ViewportController: NSObject, ObservableObject, Identifiable, WKNavi
   @Published var lastRefreshedAt: Date?
   @Published var canGoBack = false
   @Published var canGoForward = false
+  @Published var lastErrorDescription: String?
+  @Published private(set) var webView: WKWebView?
 
   let id: UUID
-  let webView: WKWebView
 
   var onChange: (() -> Void)?
 
-  init(snapshot: ViewportSnapshot) {
+  init(snapshot: ViewportSnapshot, autoload: Bool = true) {
     self.id = snapshot.id
     self.label = snapshot.label
     self.currentURLString = snapshot.urlString
     self.pageTitle = snapshot.label
-    self.status = snapshot.status
+    self.status = autoload ? snapshot.status : .restoring
     self.frame = snapshot.frame
     self.lastRefreshedAt = snapshot.lastRefreshedAt
-    let configuration = WKWebViewConfiguration()
-    configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
-    self.webView = FocusableViewportWebView(frame: .zero, configuration: configuration)
     super.init()
-    self.webView.navigationDelegate = self
-    if let url = URL(string: snapshot.urlString) {
-      self.webView.load(URLRequest(url: url))
-      self.status = .loading
-    } else {
-      self.webView.loadHTMLString(Self.invalidURLHTML(snapshot.urlString), baseURL: nil)
-      self.status = .error
-    }
     syncNavigationState()
+    if autoload {
+      ensureRuntimeAttached()
+    }
   }
 
-  static func invalidURLHTML(_ value: String) -> String {
-    """
-    <!doctype html>
-    <html>
-      <body style="font-family: -apple-system; padding: 24px;">
-        <h1>Invalid URL</h1>
-        <p>\(value)</p>
-      </body>
-    </html>
-    """
+  var shouldShowPlaceholder: Bool {
+    webView == nil || status == .restoring || status == .error || status == .disconnected
+  }
+
+  private func makeWebView() -> WKWebView {
+    let configuration = WKWebViewConfiguration()
+    configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
+    let webView = FocusableViewportWebView(frame: .zero, configuration: configuration)
+    webView.navigationDelegate = self
+    return webView
   }
 
   func snapshot() -> ViewportSnapshot {
@@ -505,58 +1209,95 @@ final class ViewportController: NSObject, ObservableObject, Identifiable, WKNavi
 
   func navigate(to urlString: String) {
     currentURLString = urlString
-    guard let url = URL(string: urlString) else {
-      webView.loadHTMLString(Self.invalidURLHTML(urlString), baseURL: nil)
-      status = .error
-      syncNavigationState()
-      onChange?()
-      return
-    }
-
-    status = .loading
-    webView.load(URLRequest(url: url))
-    syncNavigationState()
-    onChange?()
+    loadCurrentURL(status: .loading, reloadFromOrigin: false, preferWebViewReload: false)
   }
 
   func reload() {
-    status = .refreshing
     lastRefreshedAt = Date()
-    webView.reload()
-    syncNavigationState()
-    onChange?()
+    loadCurrentURL(status: .refreshing, reloadFromOrigin: false, preferWebViewReload: true)
   }
 
   func refreshAfterEdit() {
-    status = .refreshing
     lastRefreshedAt = Date()
-    webView.reloadFromOrigin()
-    syncNavigationState()
-    onChange?()
+    loadCurrentURL(status: .refreshing, reloadFromOrigin: true, preferWebViewReload: true)
   }
 
   func goBack() {
+    guard let webView else { return }
     guard webView.canGoBack else { return }
     status = .loading
+    lastErrorDescription = nil
     webView.goBack()
     syncNavigationState()
     onChange?()
   }
 
   func goForward() {
+    guard let webView else { return }
     guard webView.canGoForward else { return }
     status = .loading
+    lastErrorDescription = nil
     webView.goForward()
     syncNavigationState()
     onChange?()
   }
 
   func syncNavigationState() {
-    canGoBack = webView.canGoBack
-    canGoForward = webView.canGoForward
+    canGoBack = webView?.canGoBack ?? false
+    canGoForward = webView?.canGoForward ?? false
+  }
+
+  func ensureRuntimeAttached() {
+    if webView == nil {
+      webView = makeWebView()
+    }
+    loadCurrentURL(status: status == .refreshing ? .refreshing : .loading, reloadFromOrigin: false, preferWebViewReload: false)
+  }
+
+  private func loadCurrentURL(
+    status nextStatus: ViewportStatus,
+    reloadFromOrigin: Bool,
+    preferWebViewReload: Bool
+  ) {
+    if webView == nil {
+      webView = makeWebView()
+    }
+    guard let webView else { return }
+
+    let trimmedURL = currentURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedURL.isEmpty else {
+      status = .error
+      lastErrorDescription = "Viewport URL is empty."
+      syncNavigationState()
+      onChange?()
+      return
+    }
+    guard let url = URL(string: trimmedURL) else {
+      status = .error
+      lastErrorDescription = "Invalid URL."
+      syncNavigationState()
+      onChange?()
+      return
+    }
+
+    status = nextStatus
+    lastErrorDescription = nil
+
+    if preferWebViewReload, webView.url != nil {
+      if reloadFromOrigin {
+        webView.reloadFromOrigin()
+      } else {
+        webView.reload()
+      }
+    } else {
+      webView.load(URLRequest(url: url))
+    }
+    syncNavigationState()
+    onChange?()
   }
 
   func detectLoginForm() {
+    guard let webView else { return }
     let script = """
     (() => {
       const usernameSelectors = [
@@ -612,6 +1353,11 @@ final class ViewportController: NSObject, ObservableObject, Identifiable, WKNavi
   }
 
   func fillLogin(username: String, password: String, completion: @escaping (Bool) -> Void) {
+    ensureRuntimeAttached()
+    guard let webView else {
+      completion(false)
+      return
+    }
     let escapedUsername = username
       .replacingOccurrences(of: "\\", with: "\\\\")
       .replacingOccurrences(of: "\"", with: "\\\"")
@@ -693,6 +1439,7 @@ final class ViewportController: NSObject, ObservableObject, Identifiable, WKNavi
 
   func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
     status = .loading
+    lastErrorDescription = nil
     syncNavigationState()
     onChange?()
   }
@@ -703,6 +1450,7 @@ final class ViewportController: NSObject, ObservableObject, Identifiable, WKNavi
       : label
     currentURLString = webView.url?.absoluteString ?? currentURLString
     status = .live
+    lastErrorDescription = nil
     lastRefreshedAt = Date()
     syncNavigationState()
     detectLoginForm()
@@ -711,12 +1459,21 @@ final class ViewportController: NSObject, ObservableObject, Identifiable, WKNavi
 
   func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
     status = .error
+    lastErrorDescription = error.localizedDescription
     syncNavigationState()
     onChange?()
   }
 
   func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
     status = .error
+    lastErrorDescription = error.localizedDescription
+    syncNavigationState()
+    onChange?()
+  }
+
+  func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+    status = .disconnected
+    lastErrorDescription = "The viewport process disconnected. Reload to recover."
     syncNavigationState()
     onChange?()
   }
@@ -747,16 +1504,88 @@ struct EmbeddedViewportWebView: NSViewRepresentable {
   var onInteraction: (() -> Void)? = nil
 
   func makeNSView(context: Context) -> WKWebView {
-    controller.webView.setAccessibilityIdentifier(accessibilityIdentifier)
-    controller.webView.setAccessibilityLabel(controller.label)
-    (controller.webView as? FocusableViewportWebView)?.onInteraction = onInteraction
-    return controller.webView
+    let webView = controller.webView ?? WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+    webView.setAccessibilityIdentifier(accessibilityIdentifier)
+    webView.setAccessibilityLabel(controller.label)
+    (webView as? FocusableViewportWebView)?.onInteraction = onInteraction
+    return webView
   }
 
   func updateNSView(_ nsView: WKWebView, context: Context) {
     nsView.setAccessibilityIdentifier(accessibilityIdentifier)
     nsView.setAccessibilityLabel(controller.label)
     (nsView as? FocusableViewportWebView)?.onInteraction = onInteraction
+  }
+}
+
+struct ViewportRuntimePlaceholderView: View {
+  @ObservedObject var controller: ViewportController
+  var onRetry: () -> Void
+
+  var body: some View {
+    VStack(spacing: 12) {
+      if controller.status == .restoring {
+        ProgressView()
+          .progressViewStyle(.circular)
+      } else {
+        Image(systemName: controller.status == .disconnected ? "wifi.slash" : "exclamationmark.triangle")
+          .font(.system(size: 28, weight: .semibold))
+          .foregroundStyle(controller.status == .disconnected ? Color.secondary : Color.orange)
+      }
+
+      VStack(spacing: 4) {
+        Text(placeholderTitle)
+          .font(.headline)
+        Text(placeholderDetail)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .multilineTextAlignment(.center)
+      }
+      .frame(maxWidth: 320)
+
+      if controller.status != .restoring {
+        Button(controller.status == .disconnected ? "Reconnect" : "Retry") {
+          onRetry()
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.small)
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(Color.white.opacity(0.94))
+  }
+
+  private var placeholderTitle: String {
+    switch controller.status {
+    case .restoring:
+      return "Restoring Viewport"
+    case .disconnected:
+      return "Viewport Disconnected"
+    case .error:
+      return "Viewport Error"
+    case .loading:
+      return "Loading"
+    case .live:
+      return "Live"
+    case .refreshing:
+      return "Refreshing"
+    }
+  }
+
+  private var placeholderDetail: String {
+    if let lastErrorDescription = controller.lastErrorDescription, !lastErrorDescription.isEmpty {
+      return lastErrorDescription
+    }
+    switch controller.status {
+    case .restoring:
+      return "Loop Browser is restoring this saved viewport without blocking the rest of the workspace."
+    case .disconnected:
+      return "This viewport lost its web content process. Reload it to recover."
+    case .error:
+      return "This viewport hit a loading problem. You can retry it without affecting the rest of the app."
+    case .loading, .live, .refreshing:
+      return controller.currentURLString
+    }
   }
 }
 
@@ -933,6 +1762,12 @@ final class LoopBrowserModel: ObservableObject {
     var staggerIndex: Int
   }
 
+  private enum WorkspaceRestoreLoadResult {
+    case missing
+    case restored(WorkspaceStateFile, [String])
+    case quarantined(String, URL?)
+  }
+
   @Published var projectRoot: URL?
   @Published var projectConfig: ProjectConfigFile = .default
   @Published var localCredentials: LocalAgentLoginFile.Credentials?
@@ -945,20 +1780,51 @@ final class LoopBrowserModel: ObservableObject {
   @Published var inspectorWidth: CGFloat = 340
   @Published var showProjectSettings = false
   @Published var actionLog: [ActionLogEntry] = []
-  @Published var projectError: String?
+  @Published var workspaceNotice: WorkspaceNotice?
+  @Published var serverConfigurationError: String?
+  @Published var projectServerState = ProjectServerController.State()
 
   let externalAssistant = ExternalMCPAssistantAdapter()
   let embeddedAssistant = EmbeddedCodexAssistantAdapter()
 
   private lazy var mcpServer = LocalMCPServer(model: self)
+  private let projectServerController = ProjectServerController()
   private var pendingPersistWorkItem: DispatchWorkItem?
+  private var pendingWorkspaceRestoreWorkItem: DispatchWorkItem?
+  private var pendingViewportHydrationWorkItem: DispatchWorkItem?
   private var pendingStartupViewports: [PendingViewportSeed] = []
+  private var localProjectConfig = LocalAgentLoginFile.default
+  private var pendingServerRestartConfiguration: ProjectServerController.Configuration?
+  private var willTerminateObserver: NSObjectProtocol?
   private let launchOptions = NativeLaunchOptions.current
+  private let workspacePersistenceQueue = DispatchQueue(label: "dev.loopbrowser.workspace-persistence", qos: .utility)
+  private var currentProjectSessionToken = UUID()
+  private var lastHealthyCanvasTransform = CanvasTransform(scale: 1, offset: .zero)
+  private var quarantinedWorkspaceRestoreURL: URL?
 
   private let minimumCanvasScale: CGFloat = CanvasInteractionMath.minimumCanvasScale
   private let maximumCanvasScale: CGFloat = CanvasInteractionMath.maximumCanvasScale
   private let minimumInspectorWidth: CGFloat = 280
   private let maximumInspectorWidth: CGFloat = 520
+
+  init() {
+    projectServerController.onStateChange = { [weak self] state in
+      self?.projectServerState = state
+    }
+    projectServerController.onEvent = { [weak self] event in
+      self?.handleProjectServerEvent(event)
+    }
+    willTerminateObserver = NotificationCenter.default.addObserver(
+      forName: NSApplication.willTerminateNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      MainActor.assumeIsolated {
+        self?.persistWorkspaceStateNow()
+        self?.stopManagedProjectServerForTermination()
+      }
+    }
+  }
 
   func startServices() {
     if !launchOptions.disableMCP {
@@ -997,41 +1863,28 @@ final class LoopBrowserModel: ObservableObject {
   }
 
   func openProject(at projectURL: URL) {
+    persistWorkspaceStateNow()
+    projectServerController.invalidate()
+    pendingServerRestartConfiguration = nil
+    pendingPersistWorkItem?.cancel()
+    pendingWorkspaceRestoreWorkItem?.cancel()
+    pendingViewportHydrationWorkItem?.cancel()
+    currentProjectSessionToken = UUID()
     projectRoot = projectURL
-    projectError = nil
+    workspaceNotice = nil
+    serverConfigurationError = nil
+    quarantinedWorkspaceRestoreURL = nil
     pendingStartupViewports = []
     loadProjectConfig()
     loadLocalCredentials()
-    if launchOptions.disableWorkspaceRestore {
-      resetWorkspaceState()
-    } else {
-      loadWorkspaceState()
-    }
+    reconcileManagedProjectServerIfNeeded(projectRoot: projectURL, reason: "project open")
+    resetWorkspaceState()
+    applyHealthyCanvasTransform()
     applyProjectIdentity()
-    if viewports.isEmpty {
-      if !launchOptions.startupURLs.isEmpty {
-        pendingStartupViewports = launchOptions.startupURLs.enumerated().map { index, startupURL in
-          PendingViewportSeed(
-            routeOrURL: startupURL,
-            label: index == 0 ? "Primary" : "Viewport \(index + 1)",
-            width: launchOptions.startupViewportWidth ?? 1200,
-            height: launchOptions.startupViewportHeight ?? 800,
-            staggerIndex: index
-          )
-        }
-        applyPendingStartupViewportsIfNeeded()
-      } else if let defaultUrl = configuredDefaultURL, !defaultUrl.isEmpty {
-        pendingStartupViewports = [
-          PendingViewportSeed(
-            routeOrURL: defaultUrl,
-            label: "Home",
-            width: 1200,
-            height: 800,
-            staggerIndex: 0
-          ),
-        ]
-        applyPendingStartupViewportsIfNeeded()
-      }
+    if launchOptions.disableWorkspaceRestore {
+      seedInitialViewportsIfNeeded()
+    } else {
+      restoreWorkspaceStateAsync(projectRoot: projectURL, sessionToken: currentProjectSessionToken)
     }
     recordAction("Project", detail: "Opened \(projectURL.lastPathComponent)", success: true)
   }
@@ -1044,6 +1897,46 @@ final class LoopBrowserModel: ObservableObject {
     projectConfig.startup?.defaultUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
+  var configuredServerCommand: String {
+    projectConfig.startup?.server?.command.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+  }
+
+  var configuredServerWorkingDirectory: String {
+    projectConfig.startup?.server?.workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+  }
+
+  var configuredServerReadyURL: String {
+    projectConfig.startup?.server?.readyUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+  }
+
+  var effectiveServerReadyURL: URL? {
+    do {
+      return try resolveConfiguredServerReadyURL(
+        explicitReadyURL: configuredServerReadyURL,
+        defaultURL: configuredDefaultURL
+      )
+    } catch {
+      return nil
+    }
+  }
+
+  var canStartProjectServer: Bool {
+    !configuredServerCommand.isEmpty && [.stopped, .failed].contains(projectServerState.status)
+  }
+
+  var canStopProjectServer: Bool {
+    [.starting, .running, .ready, .stopping].contains(projectServerState.status)
+  }
+
+  var canRestartProjectServer: Bool {
+    !configuredServerCommand.isEmpty && projectRoot != nil && projectServerState.status != .stopping
+  }
+
+  var projectServerOutputPreview: String {
+    let lines = Array(projectServerState.recentOutput.suffix(12))
+    return lines.joined(separator: "\n")
+  }
+
   var currentSessionSummary: SessionSummary? {
     guard let projectRoot else { return nil }
     return SessionSummary(
@@ -1053,6 +1946,507 @@ final class LoopBrowserModel: ObservableObject {
       defaultUrl: configuredDefaultURL ?? "",
       viewportCount: viewports.count
     )
+  }
+
+  func dismissWorkspaceNotice() {
+    workspaceNotice = nil
+  }
+
+  private func clearRecoveryNoticeIfPresent() {
+    guard workspaceNotice?.kind == .recovery else { return }
+    workspaceNotice = nil
+  }
+
+  func retryWorkspaceRestore() {
+    guard let projectRoot, let quarantinedWorkspaceRestoreURL else { return }
+    workspaceNotice = nil
+    resetWorkspaceState()
+    applyHealthyCanvasTransform()
+    restoreWorkspaceStateAsync(
+      projectRoot: projectRoot,
+      sessionToken: currentProjectSessionToken,
+      sourceURL: quarantinedWorkspaceRestoreURL
+    )
+  }
+
+  func resetSavedWorkspace() {
+    guard let projectRoot else { return }
+    pendingPersistWorkItem?.cancel()
+    pendingWorkspaceRestoreWorkItem?.cancel()
+    pendingViewportHydrationWorkItem?.cancel()
+
+    try? FileManager.default.removeItem(at: workspaceStateURL(projectRoot: projectRoot))
+    if let quarantinedWorkspaceRestoreURL, FileManager.default.fileExists(atPath: quarantinedWorkspaceRestoreURL.path) {
+      try? FileManager.default.removeItem(at: quarantinedWorkspaceRestoreURL)
+    }
+    quarantinedWorkspaceRestoreURL = nil
+    workspaceNotice = nil
+    resetWorkspaceState()
+    applyHealthyCanvasTransform()
+    seedInitialViewportsIfNeeded()
+    persistWorkspaceStateNow()
+    recordAction("Project", detail: "Reset saved workspace state.", success: true)
+  }
+
+  private func seedInitialViewportsIfNeeded() {
+    guard viewports.isEmpty else { return }
+    if !launchOptions.startupURLs.isEmpty {
+      pendingStartupViewports = launchOptions.startupURLs.enumerated().map { index, startupURL in
+        PendingViewportSeed(
+          routeOrURL: startupURL,
+          label: index == 0 ? "Primary" : "Viewport \(index + 1)",
+          width: launchOptions.startupViewportWidth ?? 1200,
+          height: launchOptions.startupViewportHeight ?? 800,
+          staggerIndex: index
+        )
+      }
+      applyPendingStartupViewportsIfNeeded()
+    } else if let defaultUrl = configuredDefaultURL, !defaultUrl.isEmpty {
+      pendingStartupViewports = [
+        PendingViewportSeed(
+          routeOrURL: defaultUrl,
+          label: "Home",
+          width: 1200,
+          height: 800,
+          staggerIndex: 0
+        ),
+      ]
+      applyPendingStartupViewportsIfNeeded()
+    }
+  }
+
+  private func restoreWorkspaceStateAsync(
+    projectRoot: URL,
+    sessionToken: UUID,
+    sourceURL: URL? = nil
+  ) {
+    pendingWorkspaceRestoreWorkItem?.cancel()
+    let workspaceURL = sourceURL ?? workspaceStateURL(projectRoot: projectRoot)
+    let canonicalWorkspaceURL = workspaceStateURL(projectRoot: projectRoot)
+
+    let workItem = DispatchWorkItem { [projectRoot] in
+      let result: WorkspaceRestoreLoadResult
+
+      guard FileManager.default.fileExists(atPath: workspaceURL.path) else {
+        result = .missing
+        Task { @MainActor in
+          self.finishWorkspaceRestore(result, projectRoot: projectRoot, sessionToken: sessionToken)
+        }
+        return
+      }
+
+      do {
+        let data = try Data(contentsOf: workspaceURL)
+        let decodedState = try JSONDecoder().decode(WorkspaceStateFile.self, from: data)
+        let validation = validateWorkspaceStateForRestore(decodedState)
+        switch validation.disposition {
+        case .restored:
+          result = .restored(validation.state ?? decodedState, validation.messages)
+        case .quarantined:
+          if workspaceURL == canonicalWorkspaceURL {
+            let quarantineURL = self.quarantineWorkspaceStateFile(
+              projectRoot: projectRoot,
+              sourceURL: workspaceURL,
+              replacementData: data
+            )
+            result = .quarantined(validation.messages.joined(separator: " "), quarantineURL)
+          } else {
+            result = .quarantined(validation.messages.joined(separator: " "), workspaceURL)
+          }
+        }
+      } catch {
+        if workspaceURL == canonicalWorkspaceURL {
+          let quarantineURL = self.quarantineWorkspaceStateFile(
+            projectRoot: projectRoot,
+            sourceURL: workspaceURL,
+            replacementData: nil
+          )
+          result = .quarantined("Could not decode saved workspace state: \(error.localizedDescription)", quarantineURL)
+        } else {
+          result = .quarantined("Could not decode saved workspace state: \(error.localizedDescription)", workspaceURL)
+        }
+      }
+
+      Task { @MainActor in
+        self.finishWorkspaceRestore(result, projectRoot: projectRoot, sessionToken: sessionToken)
+      }
+    }
+
+    pendingWorkspaceRestoreWorkItem = workItem
+    DispatchQueue.global(qos: .userInitiated).async(execute: workItem)
+  }
+
+  private func finishWorkspaceRestore(
+    _ result: WorkspaceRestoreLoadResult,
+    projectRoot: URL,
+    sessionToken: UUID
+  ) {
+    guard sessionToken == currentProjectSessionToken else { return }
+    guard self.projectRoot == projectRoot else { return }
+
+    switch result {
+    case .missing:
+      seedInitialViewportsIfNeeded()
+    case .restored(let state, let messages):
+      clearRecoveryNoticeIfPresent()
+      applyValidatedWorkspaceState(state, sessionToken: sessionToken)
+      if !messages.isEmpty {
+        recordAction("Project", detail: messages.joined(separator: " "), success: true)
+      }
+    case .quarantined(let reason, let quarantineURL):
+      quarantinedWorkspaceRestoreURL = quarantineURL
+      resetWorkspaceState()
+      applyHealthyCanvasTransform()
+      workspaceNotice = WorkspaceNotice(
+        kind: .recovery,
+        title: "Opened In Safe Mode",
+        detail: reason,
+        allowsRetryRestore: quarantineURL != nil,
+        allowsResetSavedWorkspace: true
+      )
+      recordAction("Project", detail: "Skipped saved workspace and opened safely. \(reason)", success: false)
+    }
+  }
+
+  private func applyValidatedWorkspaceState(_ state: WorkspaceStateFile, sessionToken: UUID) {
+    canvasScale = CGFloat(state.canvasScale)
+    canvasOffset = CGSize(width: state.canvasOffsetX, height: state.canvasOffsetY)
+    isInspectorCollapsed = state.inspectorCollapsed ?? false
+    inspectorWidth = CGFloat(state.inspectorWidth ?? 340)
+    applyHealthyCanvasTransform()
+    viewports = state.viewports.map { snapshot in
+      let controller = ViewportController(snapshot: snapshot, autoload: false)
+      attachViewport(controller, sessionToken: sessionToken)
+      return controller
+    }
+    selectedViewportID = viewports.first?.id
+    scheduleViewportHydration(sessionToken: sessionToken)
+  }
+
+  private func scheduleViewportHydration(sessionToken: UUID) {
+    pendingViewportHydrationWorkItem?.cancel()
+    let pendingIDs = viewports.map(\.id)
+    hydrateViewportRuntimeQueue(pendingIDs, sessionToken: sessionToken)
+  }
+
+  private func hydrateViewportRuntimeQueue(_ pendingIDs: [UUID], sessionToken: UUID) {
+    guard !pendingIDs.isEmpty else { return }
+    let nextID = pendingIDs[0]
+    let remainingIDs = Array(pendingIDs.dropFirst())
+    let workItem = DispatchWorkItem { [weak self] in
+      Task { @MainActor in
+        guard let self else { return }
+        guard sessionToken == self.currentProjectSessionToken else { return }
+        if let controller = self.viewports.first(where: { $0.id == nextID }) {
+          controller.ensureRuntimeAttached()
+        }
+        self.hydrateViewportRuntimeQueue(remainingIDs, sessionToken: sessionToken)
+      }
+    }
+    pendingViewportHydrationWorkItem = workItem
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: workItem)
+  }
+
+  nonisolated private func quarantineWorkspaceStateFile(
+    projectRoot: URL,
+    sourceURL: URL,
+    replacementData: Data?
+  ) -> URL? {
+    let destinationURL = quarantinedWorkspaceStateURL(projectRoot: projectRoot)
+    do {
+      try FileManager.default.createDirectory(
+        at: projectWorkspaceDirectory(projectRoot: projectRoot),
+        withIntermediateDirectories: true
+      )
+      if let replacementData {
+        try replacementData.write(to: destinationURL, options: .atomic)
+        try? FileManager.default.removeItem(at: sourceURL)
+      } else if FileManager.default.fileExists(atPath: sourceURL.path) {
+        try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
+      }
+      return destinationURL
+    } catch {
+      return nil
+    }
+  }
+
+  private func presentConfigurationNotice(title: String, detail: String) {
+    workspaceNotice = WorkspaceNotice(
+      kind: .configuration,
+      title: title,
+      detail: detail,
+      allowsRetryRestore: false,
+      allowsResetSavedWorkspace: false
+    )
+  }
+
+  private func loadManagedProjectServerRecord(projectRoot: URL) -> ManagedProjectServerRecord? {
+    let recordURL = managedProjectServerRecordURL(projectRoot: projectRoot)
+    guard FileManager.default.fileExists(atPath: recordURL.path) else { return nil }
+
+    do {
+      let data = try Data(contentsOf: recordURL)
+      return try JSONDecoder().decode(ManagedProjectServerRecord.self, from: data)
+    } catch {
+      try? FileManager.default.removeItem(at: recordURL)
+      return nil
+    }
+  }
+
+  private func persistManagedProjectServerRecord(
+    configuration: ProjectServerController.Configuration,
+    rootPID: Int32,
+    processGroupID: Int32?
+  ) {
+    let record = ManagedProjectServerRecord(
+      rootPID: rootPID,
+      processGroupID: processGroupID,
+      projectRootPath: configuration.projectRoot.path,
+      command: configuration.command,
+      workingDirectoryPath: configuration.workingDirectory.path,
+      readyURL: configuration.readyURL?.absoluteString,
+      startedAt: Date()
+    )
+
+    do {
+      try FileManager.default.createDirectory(
+        at: projectWorkspaceDirectory(projectRoot: configuration.projectRoot),
+        withIntermediateDirectories: true
+      )
+      let data = try JSONEncoder.pretty.encode(record)
+      try data.write(to: managedProjectServerRecordURL(projectRoot: configuration.projectRoot), options: .atomic)
+    } catch {
+      recordAction("Server", detail: "Could not persist managed server state: \(error.localizedDescription)", success: false)
+    }
+  }
+
+  private func clearManagedProjectServerRecord(projectRoot: URL) {
+    try? FileManager.default.removeItem(at: managedProjectServerRecordURL(projectRoot: projectRoot))
+  }
+
+  private func reconcileManagedProjectServerIfNeeded(projectRoot: URL, reason: String) {
+    guard let record = loadManagedProjectServerRecord(projectRoot: projectRoot) else { return }
+
+    let rootAlive = isProcessAlive(record.rootPID)
+    let processGroupAlive = record.processGroupID.map(isProcessGroupAlive) ?? false
+    if !rootAlive && !processGroupAlive {
+      clearManagedProjectServerRecord(projectRoot: projectRoot)
+      return
+    }
+
+    recordAction(
+      "Server",
+      detail: "Cleaning up stale managed server from \(reason) (PID \(record.rootPID)).",
+      success: true
+    )
+    signalManagedServer(processGroupID: record.processGroupID, rootPID: record.rootPID, signal: SIGTERM)
+
+    if !waitForManagedServerExit(processGroupID: record.processGroupID, rootPID: record.rootPID, timeout: 1.5) {
+      signalManagedServer(processGroupID: record.processGroupID, rootPID: record.rootPID, signal: SIGKILL)
+      _ = waitForManagedServerExit(processGroupID: record.processGroupID, rootPID: record.rootPID, timeout: 0.75)
+    }
+
+    if isProcessAlive(record.rootPID) || (record.processGroupID.map(isProcessGroupAlive) ?? false) {
+      recordAction(
+        "Server",
+        detail: "Stale managed server PID \(record.rootPID) is still running after cleanup attempt.",
+        success: false
+      )
+    } else {
+      clearManagedProjectServerRecord(projectRoot: projectRoot)
+    }
+  }
+
+  private func applyHealthyCanvasTransform() {
+    guard canvasScale.isFinite, canvasScale > 0 else {
+      canvasScale = lastHealthyCanvasTransform.scale
+      canvasOffset = lastHealthyCanvasTransform.offset
+      return
+    }
+    guard canvasOffset.width.isFinite, canvasOffset.height.isFinite else {
+      canvasOffset = lastHealthyCanvasTransform.offset
+      return
+    }
+    lastHealthyCanvasTransform = CanvasTransform(scale: canvasScale, offset: canvasOffset)
+  }
+
+  func startProjectServer() {
+    guard let projectRoot else { return }
+    reconcileManagedProjectServerIfNeeded(projectRoot: projectRoot, reason: "server start")
+    guard let configuration = makeProjectServerConfiguration(recordErrors: true) else { return }
+    serverConfigurationError = nil
+    pendingServerRestartConfiguration = nil
+    if let rootPID = projectServerController.start(configuration: configuration) {
+      persistManagedProjectServerRecord(
+        configuration: configuration,
+        rootPID: rootPID,
+        processGroupID: projectServerController.managedProcessGroupID
+      )
+    }
+  }
+
+  func stopProjectServer() {
+    pendingServerRestartConfiguration = nil
+    projectServerController.stop()
+  }
+
+  func restartProjectServer() {
+    guard let projectRoot else { return }
+    reconcileManagedProjectServerIfNeeded(projectRoot: projectRoot, reason: "server restart")
+    guard let configuration = makeProjectServerConfiguration(recordErrors: true) else { return }
+    serverConfigurationError = nil
+    pendingServerRestartConfiguration = nil
+    if [.stopped, .failed].contains(projectServerState.status) {
+      if let rootPID = projectServerController.start(configuration: configuration) {
+        persistManagedProjectServerRecord(
+          configuration: configuration,
+          rootPID: rootPID,
+          processGroupID: projectServerController.managedProcessGroupID
+        )
+      }
+      return
+    }
+    pendingServerRestartConfiguration = configuration
+    projectServerController.stop()
+  }
+
+  private func makeProjectServerConfiguration(recordErrors: Bool) -> ProjectServerController.Configuration? {
+    guard let projectRoot else { return nil }
+    let command = configuredServerCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !command.isEmpty else {
+      if recordErrors {
+        serverConfigurationError = "Set a server command in Project Settings before starting the project server."
+        recordAction("Server", detail: serverConfigurationError ?? "Missing server command.", success: false)
+      }
+      return nil
+    }
+
+    do {
+      let workingDirectory = try resolveProjectDirectoryURL(
+        projectRoot: projectRoot,
+        relativePath: configuredServerWorkingDirectory.isEmpty ? nil : configuredServerWorkingDirectory
+      )
+      let readyURL = try resolveConfiguredServerReadyURL(
+        explicitReadyURL: configuredServerReadyURL,
+        defaultURL: configuredDefaultURL
+      )
+      let environment = ProcessInfo.processInfo.environment.merging(localProjectConfig.server?.environment ?? [:]) { _, override in
+        override
+      }
+      return ProjectServerController.Configuration(
+        projectRoot: projectRoot,
+        command: command,
+        workingDirectory: workingDirectory,
+        readyURL: readyURL,
+        environment: environment
+      )
+    } catch {
+      if recordErrors {
+        serverConfigurationError = error.localizedDescription
+        recordAction("Server", detail: error.localizedDescription, success: false)
+      }
+      return nil
+    }
+  }
+
+  private func resolveConfiguredServerReadyURL(explicitReadyURL: String, defaultURL: String?) throws -> URL? {
+    let trimmedExplicitReadyURL = explicitReadyURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !trimmedExplicitReadyURL.isEmpty {
+      return try resolveHTTPReadyURL(trimmedExplicitReadyURL)
+    }
+
+    guard let defaultURL, !defaultURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return nil
+    }
+    guard let url = try? resolveHTTPReadyURL(defaultURL) else {
+      return nil
+    }
+    return url
+  }
+
+  private func handleProjectServerEvent(_ event: ProjectServerController.Event) {
+    switch event {
+    case .started(let command, let pid):
+      serverConfigurationError = nil
+      recordAction("Server", detail: "Started local server (PID \(pid)) with `\(command)`.", success: true)
+    case .ready(let url):
+      let reloadedCount = reloadViewportsMatchingServerOrigin(readyURL: url)
+      let detail =
+        reloadedCount > 0
+        ? "Server ready at \(url.absoluteString). Reloaded \(reloadedCount) matching viewport(s)."
+        : "Server ready at \(url.absoluteString)."
+      recordAction("Server", detail: detail, success: true)
+    case .readinessTimedOut(let url):
+      if let url {
+        recordAction(
+          "Server",
+          detail: "Server is running, but readiness polling timed out for \(url.absoluteString).",
+          success: false
+        )
+      } else {
+        recordAction("Server", detail: "Server is running without a readiness URL.", success: true)
+      }
+    case .stopped(let exitCode, let forced, let wasRequested):
+      if let projectRoot {
+        clearManagedProjectServerRecord(projectRoot: projectRoot)
+      }
+      let detail: String
+      let success: Bool
+      if wasRequested {
+        detail =
+          forced
+          ? "Stopped local server after forcing termination (exit \(exitCode ?? 0))."
+          : "Stopped local server (exit \(exitCode ?? 0))."
+        success = true
+      } else {
+        detail = "Server exited on its own with status \(exitCode ?? 0)."
+        success = false
+      }
+      recordAction("Server", detail: detail, success: success)
+
+      if let pendingServerRestartConfiguration {
+        let configuration = pendingServerRestartConfiguration
+        self.pendingServerRestartConfiguration = nil
+        if let rootPID = projectServerController.start(configuration: configuration) {
+          persistManagedProjectServerRecord(
+            configuration: configuration,
+            rootPID: rootPID,
+            processGroupID: projectServerController.managedProcessGroupID
+          )
+        }
+      }
+    case .failed(let message, _):
+      if let projectRoot {
+        clearManagedProjectServerRecord(projectRoot: projectRoot)
+      }
+      recordAction("Server", detail: message, success: false)
+    }
+  }
+
+  private func stopManagedProjectServerForTermination() {
+    _ = projectServerController.invalidate(waitForTermination: true)
+  }
+
+  private func reloadViewportsMatchingServerOrigin(readyURL: URL) -> Int {
+    guard let readyOrigin = readyURL.loopOrigin else { return 0 }
+
+    var reloadedCount = 0
+    for viewport in viewports {
+      guard let viewportOrigin = URL(string: viewport.currentURLString)?.loopOrigin else { continue }
+      guard viewportOrigin == readyOrigin else { continue }
+      if viewport.status == .error || viewport.status == .disconnected {
+        viewport.navigate(to: viewport.currentURLString)
+      } else {
+        viewport.reload()
+      }
+      reloadedCount += 1
+    }
+
+    if reloadedCount > 0 {
+      persistWorkspaceStateNow()
+    }
+
+    return reloadedCount
   }
 
   func activeViewport() -> ViewportController? {
@@ -1074,7 +2468,7 @@ final class LoopBrowserModel: ObservableObject {
   func setInspectorCollapsed(_ collapsed: Bool) {
     guard isInspectorCollapsed != collapsed else { return }
     isInspectorCollapsed = collapsed
-    persistWorkspaceState()
+    persistWorkspaceStateNow()
   }
 
   func setInspectorWidth(_ width: CGFloat) {
@@ -1122,11 +2516,18 @@ final class LoopBrowserModel: ObservableObject {
   }
 
   func panCanvasByScroll(deltaX: CGFloat, deltaY: CGFloat) {
-    canvasOffset = CanvasInteractionMath.pannedOffset(
+    let nextOffset = CanvasInteractionMath.pannedOffset(
       origin: canvasOffset,
       deltaX: deltaX,
       deltaY: deltaY
     )
+    guard nextOffset.width.isFinite, nextOffset.height.isFinite else {
+      canvasScale = lastHealthyCanvasTransform.scale
+      canvasOffset = lastHealthyCanvasTransform.offset
+      return
+    }
+    canvasOffset = nextOffset
+    applyHealthyCanvasTransform()
     scheduleWorkspacePersistence()
   }
 
@@ -1149,6 +2550,7 @@ final class LoopBrowserModel: ObservableObject {
       width: canvasViewportCenter.x - anchor.x,
       height: canvasViewportCenter.y - anchor.y
     )
+    applyHealthyCanvasTransform()
     scheduleWorkspacePersistence()
   }
 
@@ -1164,24 +2566,37 @@ final class LoopBrowserModel: ObservableObject {
       minimumScale: minimumCanvasScale,
       maximumScale: maximumCanvasScale
     )
+    guard transform.scale.isFinite, transform.offset.width.isFinite, transform.offset.height.isFinite else {
+      canvasScale = lastHealthyCanvasTransform.scale
+      canvasOffset = lastHealthyCanvasTransform.offset
+      return
+    }
     canvasScale = transform.scale
     canvasOffset = transform.offset
+    applyHealthyCanvasTransform()
     if persistImmediately {
-      persistWorkspaceState()
+      persistWorkspaceStateNow()
     } else {
       scheduleWorkspacePersistence()
     }
   }
 
   func panCanvas(from origin: CGSize, translation: CGSize) {
-    canvasOffset = CanvasInteractionMath.pannedOffset(
+    let nextOffset = CanvasInteractionMath.pannedOffset(
       origin: origin,
       translation: translation
     )
+    guard nextOffset.width.isFinite, nextOffset.height.isFinite else {
+      canvasScale = lastHealthyCanvasTransform.scale
+      canvasOffset = lastHealthyCanvasTransform.offset
+      return
+    }
+    canvasOffset = nextOffset
+    applyHealthyCanvasTransform()
   }
 
   func finishCanvasPan() {
-    persistWorkspaceState()
+    persistWorkspaceStateNow()
   }
 
   func selectViewport(_ viewportID: UUID?, syncKeyboardFocus: Bool = true) {
@@ -1202,7 +2617,7 @@ final class LoopBrowserModel: ObservableObject {
   func finishViewportMove(viewportID: UUID) {
     guard let viewport = viewports.first(where: { $0.id == viewportID }) else { return }
     selectedViewportID = viewportID
-    persistWorkspaceState()
+    persistWorkspaceStateNow()
     recordAction("Viewport", detail: "Moved \(viewport.label)", success: true)
   }
 
@@ -1215,7 +2630,7 @@ final class LoopBrowserModel: ObservableObject {
   func finishViewportResize(viewportID: UUID) {
     guard let viewport = viewports.first(where: { $0.id == viewportID }) else { return }
     selectedViewportID = viewportID
-    persistWorkspaceState()
+    persistWorkspaceStateNow()
     recordAction("Viewport", detail: "Resized \(viewport.label)", success: true)
   }
 
@@ -1230,21 +2645,79 @@ final class LoopBrowserModel: ObservableObject {
         return
       }
 
-      let window = viewport.webView.window ?? NSApp.keyWindow ?? NSApp.mainWindow
+      let window = viewport.webView?.window ?? NSApp.keyWindow ?? NSApp.mainWindow
       window?.makeFirstResponder(nil)
-      window?.makeFirstResponder(viewport.webView)
+      if let webView = viewport.webView {
+        window?.makeFirstResponder(webView)
+      }
     }
   }
 
   func scheduleWorkspacePersistence() {
     pendingPersistWorkItem?.cancel()
+    let sessionToken = currentProjectSessionToken
     let workItem = DispatchWorkItem { [weak self] in
       Task { @MainActor in
-        self?.persistWorkspaceState()
+        self?.persistWorkspaceState(sessionToken: sessionToken, synchronously: false)
       }
     }
     pendingPersistWorkItem = workItem
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: workItem)
+  }
+
+  func persistWorkspaceStateNow() {
+    pendingPersistWorkItem?.cancel()
+    persistWorkspaceState(sessionToken: currentProjectSessionToken, synchronously: true)
+  }
+
+  private func persistWorkspaceState(sessionToken: UUID, synchronously: Bool) {
+    guard sessionToken == currentProjectSessionToken else { return }
+    guard let snapshot = buildWorkspaceStateSnapshot(sessionToken: sessionToken) else { return }
+    writeWorkspaceStateSnapshot(snapshot, synchronously: synchronously)
+  }
+
+  private func buildWorkspaceStateSnapshot(sessionToken: UUID) -> (sessionToken: UUID, projectRoot: URL, state: WorkspaceStateFile)? {
+    guard let projectRoot else { return nil }
+    let snapshot = WorkspaceStateFile(
+      version: 1,
+      canvasScale: Double(canvasScale),
+      canvasOffsetX: canvasOffset.width,
+      canvasOffsetY: canvasOffset.height,
+      viewports: viewports.map { $0.snapshot() },
+      inspectorCollapsed: isInspectorCollapsed,
+      inspectorWidth: inspectorWidth
+    )
+    return (sessionToken, projectRoot, snapshot)
+  }
+
+  private func writeWorkspaceStateSnapshot(
+    _ snapshot: (sessionToken: UUID, projectRoot: URL, state: WorkspaceStateFile),
+    synchronously: Bool
+  ) {
+    let writeOperation: @Sendable () -> Void = { [snapshot] in
+      do {
+        try FileManager.default.createDirectory(
+          at: projectWorkspaceDirectory(projectRoot: snapshot.projectRoot),
+          withIntermediateDirectories: true
+        )
+        let data = try JSONEncoder.pretty.encode(snapshot.state)
+        try data.write(to: workspaceStateURL(projectRoot: snapshot.projectRoot), options: .atomic)
+      } catch {
+        Task { @MainActor in
+          guard snapshot.sessionToken == self.currentProjectSessionToken else { return }
+          self.presentConfigurationNotice(
+            title: "Could Not Save Workspace State",
+            detail: error.localizedDescription
+          )
+        }
+      }
+    }
+
+    if synchronously {
+      workspacePersistenceQueue.sync(execute: writeOperation)
+    } else {
+      workspacePersistenceQueue.async(execute: writeOperation)
+    }
   }
 
   func canUseAgentLogin(on viewport: ViewportController) -> Bool {
@@ -1280,8 +2753,9 @@ final class LoopBrowserModel: ObservableObject {
     staggerIndex: Int = 0
   ) -> ViewportController? {
     guard let resolvedURL = resolveTargetURL(routeOrURL) else {
-      projectError = "Could not resolve viewport URL from \(routeOrURL). Set Default URL or pass a full URL."
-      recordAction("Viewport", detail: projectError ?? "Could not resolve viewport URL.", success: false)
+      let detail = "Could not resolve viewport URL from \(routeOrURL). Set Default URL or pass a full URL."
+      presentConfigurationNotice(title: "Could Not Create Viewport", detail: detail)
+      recordAction("Viewport", detail: detail, success: false)
       return nil
     }
 
@@ -1300,10 +2774,10 @@ final class LoopBrowserModel: ObservableObject {
       lastRefreshedAt: nil
     )
     let controller = ViewportController(snapshot: snapshot)
-    attachViewport(controller)
+    attachViewport(controller, sessionToken: currentProjectSessionToken)
     viewports.append(controller)
     selectedViewportID = controller.id
-    persistWorkspaceState()
+    persistWorkspaceStateNow()
     recordAction("Viewport", detail: "Created \(controller.label) at \(resolvedURL)", success: true)
     return controller
   }
@@ -1325,7 +2799,7 @@ final class LoopBrowserModel: ObservableObject {
       return
     }
     viewport.navigate(to: resolvedURL)
-    persistWorkspaceState()
+    persistWorkspaceStateNow()
     recordAction("Viewport", detail: "Updated \(viewport.label) to \(resolvedURL)", success: true)
   }
 
@@ -1335,7 +2809,7 @@ final class LoopBrowserModel: ObservableObject {
     updatedFrame.width = max(320, width)
     updatedFrame.height = max(240, height)
     viewport.frame = updatedFrame
-    persistWorkspaceState()
+    persistWorkspaceStateNow()
     recordAction("Viewport", detail: "Resized \(viewport.label) to \(Int(width))×\(Int(height))", success: true)
   }
 
@@ -1345,14 +2819,14 @@ final class LoopBrowserModel: ObservableObject {
     if selectedViewportID == viewport.id {
       selectedViewportID = viewports.first?.id
     }
-    persistWorkspaceState()
+    persistWorkspaceStateNow()
     recordAction("Viewport", detail: "Closed \(viewport.label)", success: true)
   }
 
   func refreshViewport(viewportID: UUID) {
     guard let viewport = viewports.first(where: { $0.id == viewportID }) else { return }
     viewport.reload()
-    persistWorkspaceState()
+    persistWorkspaceStateNow()
     recordAction("Viewport", detail: "Reloaded \(viewport.label)", success: true)
   }
 
@@ -1360,7 +2834,7 @@ final class LoopBrowserModel: ObservableObject {
     for viewport in viewports {
       viewport.reload()
     }
-    persistWorkspaceState()
+    persistWorkspaceStateNow()
     recordAction("Viewport", detail: "Refreshed all live viewports", success: true)
   }
 
@@ -1368,7 +2842,7 @@ final class LoopBrowserModel: ObservableObject {
     for viewport in viewports {
       viewport.refreshAfterEdit()
     }
-    persistWorkspaceState()
+    persistWorkspaceStateNow()
     recordAction(
       "Files",
       detail: "Edited \(touchedFiles.count) file(s) and refreshed all viewports.",
@@ -1378,12 +2852,23 @@ final class LoopBrowserModel: ObservableObject {
 
   func setCanvasTransform(scale: CGFloat? = nil, offset: CGSize? = nil) {
     if let scale {
+      guard scale.isFinite, scale > 0 else {
+        canvasScale = lastHealthyCanvasTransform.scale
+        canvasOffset = lastHealthyCanvasTransform.offset
+        return
+      }
       canvasScale = min(max(scale, minimumCanvasScale), maximumCanvasScale)
     }
     if let offset {
+      guard offset.width.isFinite, offset.height.isFinite else {
+        canvasScale = lastHealthyCanvasTransform.scale
+        canvasOffset = lastHealthyCanvasTransform.offset
+        return
+      }
       canvasOffset = offset
     }
-    persistWorkspaceState()
+    applyHealthyCanvasTransform()
+    persistWorkspaceStateNow()
   }
 
   func applyAgentLogin(to viewport: ViewportController) {
@@ -1402,7 +2887,15 @@ final class LoopBrowserModel: ObservableObject {
     }
   }
 
-  func saveProjectAppearance(defaultUrl: String, chromeColor: String, accentColor: String, projectIconPath: String) {
+  func saveProjectAppearance(
+    defaultUrl: String,
+    chromeColor: String,
+    accentColor: String,
+    projectIconPath: String,
+    serverCommand: String? = nil,
+    serverWorkingDirectory: String? = nil,
+    serverReadyURL: String? = nil
+  ) {
     guard let projectRoot else { return }
 
     let trimmedDefaultURL = defaultUrl.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1411,6 +2904,42 @@ final class LoopBrowserModel: ObservableObject {
       normalizedDefaultURL = nil
     } else {
       normalizedDefaultURL = try? normalizeAddress(trimmedDefaultURL)
+    }
+
+    let resolvedServerCommand = (serverCommand ?? configuredServerCommand)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let resolvedWorkingDirectory = (serverWorkingDirectory ?? configuredServerWorkingDirectory)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let resolvedReadyURL = (serverReadyURL ?? configuredServerReadyURL)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    let nextServerConfig: ProjectConfigFile.Startup.Server?
+    do {
+      if resolvedServerCommand.isEmpty {
+        guard resolvedWorkingDirectory.isEmpty, resolvedReadyURL.isEmpty else {
+          throw NSError(domain: "LoopBrowserNative", code: 9, userInfo: [
+            NSLocalizedDescriptionKey: "Enter a server command before saving server startup settings.",
+          ])
+        }
+        nextServerConfig = nil
+      } else {
+        if !resolvedWorkingDirectory.isEmpty {
+          _ = try resolveProjectDirectoryURL(projectRoot: projectRoot, relativePath: resolvedWorkingDirectory)
+        }
+        let normalizedReadyURL = resolvedReadyURL.isEmpty ? nil : try resolveHTTPReadyURL(resolvedReadyURL).absoluteString
+        nextServerConfig = ProjectConfigFile.Startup.Server(
+          command: resolvedServerCommand,
+          workingDirectory: resolvedWorkingDirectory.isEmpty ? nil : resolvedWorkingDirectory,
+          readyUrl: normalizedReadyURL
+        )
+      }
+    } catch {
+      presentConfigurationNotice(
+        title: "Could Not Save Project Settings",
+        detail: error.localizedDescription
+      )
+      recordAction("Project", detail: "Could not save .loop-browser.json: \(error.localizedDescription)", success: false)
+      return
     }
 
     projectConfig = ProjectConfigFile(
@@ -1422,7 +2951,7 @@ final class LoopBrowserModel: ObservableObject {
           ? nil
           : projectIconPath.trimmingCharacters(in: .whitespacesAndNewlines)
       ),
-      startup: ProjectConfigFile.Startup(defaultUrl: normalizedDefaultURL),
+      startup: ProjectConfigFile.Startup(defaultUrl: normalizedDefaultURL, server: nextServerConfig),
       agentLogin: projectConfig.agentLogin
     )
 
@@ -1434,9 +2963,14 @@ final class LoopBrowserModel: ObservableObject {
       let data = try JSONEncoder.pretty.encode(projectConfig)
       try data.write(to: projectConfigURL(projectRoot: projectRoot), options: .atomic)
       applyProjectIdentity()
+      workspaceNotice = nil
+      serverConfigurationError = nil
       recordAction("Project", detail: "Saved .loop-browser.json", success: true)
     } catch {
-      projectError = error.localizedDescription
+      presentConfigurationNotice(
+        title: "Could Not Save Project Settings",
+        detail: error.localizedDescription
+      )
       recordAction("Project", detail: "Could not save .loop-browser.json: \(error.localizedDescription)", success: false)
     }
   }
@@ -1446,33 +2980,56 @@ final class LoopBrowserModel: ObservableObject {
     let trimmedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
     let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedUsername.isEmpty, !trimmedPassword.isEmpty else {
-      projectError = "Enter both an agent login username and password."
+      presentConfigurationNotice(
+        title: "Could Not Save Agent Login",
+        detail: "Enter both an agent login username and password."
+      )
       return
     }
 
-    let payload = LocalAgentLoginFile(
-      version: 1,
-      agentLogin: LocalAgentLoginFile.Credentials(username: trimmedUsername, password: trimmedPassword)
-    )
+    var payload = localProjectConfig
+    payload.version = 1
+    payload.agentLogin = LocalAgentLoginFile.Credentials(username: trimmedUsername, password: trimmedPassword)
 
     do {
       let data = try JSONEncoder.pretty.encode(payload)
       try data.write(to: localLoginURL(projectRoot: projectRoot), options: .atomic)
       ensureGitIgnoreEntry(projectRoot: projectRoot)
+      localProjectConfig = payload
       localCredentials = payload.agentLogin
+      workspaceNotice = nil
       recordAction("Login", detail: "Saved .loop-browser.local.json", success: true)
     } catch {
-      projectError = error.localizedDescription
+      presentConfigurationNotice(
+        title: "Could Not Save Agent Login",
+        detail: error.localizedDescription
+      )
       recordAction("Login", detail: "Could not save .loop-browser.local.json: \(error.localizedDescription)", success: false)
     }
   }
 
   func clearLocalAgentLogin() {
     guard let projectRoot else { return }
+    var payload = localProjectConfig
+    payload.version = 1
+    payload.agentLogin = nil
+
     do {
-      try FileManager.default.removeItem(at: localLoginURL(projectRoot: projectRoot))
+      if payload.server == nil {
+        try? FileManager.default.removeItem(at: localLoginURL(projectRoot: projectRoot))
+      } else {
+        let data = try JSONEncoder.pretty.encode(payload)
+        try data.write(to: localLoginURL(projectRoot: projectRoot), options: .atomic)
+        ensureGitIgnoreEntry(projectRoot: projectRoot)
+      }
+      localProjectConfig = payload
     } catch {
-      // Ignore missing file.
+      presentConfigurationNotice(
+        title: "Could Not Update Agent Login",
+        detail: error.localizedDescription
+      )
+      recordAction("Login", detail: "Could not update .loop-browser.local.json: \(error.localizedDescription)", success: false)
+      return
     }
     localCredentials = nil
     recordAction("Login", detail: "Cleared .loop-browser.local.json", success: true)
@@ -1615,14 +3172,16 @@ final class LoopBrowserModel: ObservableObject {
     return try? normalizeAddress(trimmed)
   }
 
-  private func attachViewport(_ controller: ViewportController) {
+  private func attachViewport(_ controller: ViewportController, sessionToken: UUID) {
     controller.onChange = { [weak self, weak controller] in
       guard let self, let controller else { return }
       Task { @MainActor in
+        guard sessionToken == self.currentProjectSessionToken else { return }
+        guard self.viewports.contains(where: { $0.id == controller.id }) else { return }
         if controller.pageTitle != controller.label, !controller.pageTitle.isEmpty {
           controller.label = controller.pageTitle
         }
-        self.persistWorkspaceState()
+        self.scheduleWorkspacePersistence()
       }
     }
   }
@@ -1640,7 +3199,10 @@ final class LoopBrowserModel: ObservableObject {
       projectConfig = try JSONDecoder().decode(ProjectConfigFile.self, from: data)
     } catch {
       projectConfig = .default
-      projectError = "Could not load .loop-browser.json: \(error.localizedDescription)"
+      presentConfigurationNotice(
+        title: "Project Settings Could Not Be Loaded",
+        detail: "Could not load .loop-browser.json: \(error.localizedDescription)"
+      )
     }
   }
 
@@ -1648,75 +3210,33 @@ final class LoopBrowserModel: ObservableObject {
     guard let projectRoot else { return }
     let credentialsURL = localLoginURL(projectRoot: projectRoot)
     guard FileManager.default.fileExists(atPath: credentialsURL.path) else {
+      localProjectConfig = .default
       localCredentials = nil
       return
     }
 
     do {
       let data = try Data(contentsOf: credentialsURL)
-      localCredentials = try JSONDecoder().decode(LocalAgentLoginFile.self, from: data).agentLogin
+      localProjectConfig = try JSONDecoder().decode(LocalAgentLoginFile.self, from: data)
+      localCredentials = localProjectConfig.agentLogin
     } catch {
+      localProjectConfig = .default
       localCredentials = nil
-      projectError = "Could not load .loop-browser.local.json: \(error.localizedDescription)"
-    }
-  }
-
-  private func loadWorkspaceState() {
-    guard let projectRoot else { return }
-    let stateURL = workspaceStateURL(projectRoot: projectRoot)
-    guard FileManager.default.fileExists(atPath: stateURL.path) else {
-      resetWorkspaceState()
-      return
-    }
-
-    do {
-      let data = try Data(contentsOf: stateURL)
-      let state = try JSONDecoder().decode(WorkspaceStateFile.self, from: data)
-      canvasScale = CGFloat(state.canvasScale)
-      canvasOffset = CGSize(width: state.canvasOffsetX, height: state.canvasOffsetY)
-      isInspectorCollapsed = state.inspectorCollapsed ?? false
-      inspectorWidth = CGFloat(state.inspectorWidth ?? 340)
-      viewports = state.viewports.map { snapshot in
-        let controller = ViewportController(snapshot: snapshot)
-        attachViewport(controller)
-        return controller
-      }
-      selectedViewportID = viewports.first?.id
-    } catch {
-      resetWorkspaceState()
-      projectError = "Could not load workspace state: \(error.localizedDescription)"
+      presentConfigurationNotice(
+        title: "Local Project Settings Could Not Be Loaded",
+        detail: "Could not load .loop-browser.local.json: \(error.localizedDescription)"
+      )
     }
   }
 
   private func resetWorkspaceState() {
+    pendingViewportHydrationWorkItem?.cancel()
     viewports = []
     selectedViewportID = nil
     canvasScale = 1
     canvasOffset = .zero
     isInspectorCollapsed = false
     inspectorWidth = 340
-  }
-
-  func persistWorkspaceState() {
-    guard let projectRoot else { return }
-    do {
-      try FileManager.default.createDirectory(
-        at: projectWorkspaceDirectory(projectRoot: projectRoot),
-        withIntermediateDirectories: true
-      )
-      let state = WorkspaceStateFile(
-        canvasScale: Double(canvasScale),
-        canvasOffsetX: canvasOffset.width,
-        canvasOffsetY: canvasOffset.height,
-        viewports: viewports.map { $0.snapshot() },
-        inspectorCollapsed: isInspectorCollapsed,
-        inspectorWidth: inspectorWidth
-      )
-      let data = try JSONEncoder.pretty.encode(state)
-      try data.write(to: workspaceStateURL(projectRoot: projectRoot), options: .atomic)
-    } catch {
-      projectError = error.localizedDescription
-    }
   }
 
   private func ensureGitIgnoreEntry(projectRoot: URL) {
@@ -1809,6 +3329,7 @@ struct WelcomeView: View {
         }
         .buttonStyle(.bordered)
         .disabled(model.projectRoot == nil)
+        .accessibilityIdentifier("project-settings-open")
       }
       VStack(alignment: .leading, spacing: 12) {
         FeatureRow(title: "Project config parity", detail: "Reads and writes .loop-browser.json plus repo-local .loop-browser.local.json.")
@@ -1901,7 +3422,7 @@ struct InspectorResizeHandle: View {
           }
           .onEnded { _ in
             widthOrigin = nil
-            model.persistWorkspaceState()
+            model.persistWorkspaceStateNow()
           }
       )
   }
@@ -1913,6 +3434,9 @@ struct WorkspaceCanvasView: View {
   var body: some View {
     VStack(spacing: 0) {
       WorkspaceToolbar()
+      if let workspaceNotice = model.workspaceNotice {
+        WorkspaceNoticeBanner(notice: workspaceNotice)
+      }
       GeometryReader { geometry in
         ZStack(alignment: .topLeading) {
           ZStack(alignment: .topLeading) {
@@ -1974,6 +3498,64 @@ struct WorkspaceCanvasView: View {
   }
 }
 
+struct WorkspaceNoticeBanner: View {
+  @EnvironmentObject private var model: LoopBrowserModel
+  let notice: WorkspaceNotice
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 14) {
+      Image(systemName: notice.kind == .recovery ? "shield.lefthalf.filled" : "exclamationmark.triangle.fill")
+        .font(.system(size: 16, weight: .semibold))
+        .foregroundStyle(notice.kind == .recovery ? .orange : .red)
+      VStack(alignment: .leading, spacing: 4) {
+        Text(notice.title)
+          .font(.subheadline.weight(.semibold))
+        Text(notice.detail)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      Spacer()
+      HStack(spacing: 8) {
+        if notice.allowsRetryRestore {
+          Button("Retry Restore") {
+            model.retryWorkspaceRestore()
+          }
+          .buttonStyle(.bordered)
+          .controlSize(.small)
+          .accessibilityIdentifier("workspace-retry-restore")
+        }
+        if notice.allowsResetSavedWorkspace {
+          Button("Reset Saved Workspace") {
+            model.resetSavedWorkspace()
+          }
+          .buttonStyle(.borderedProminent)
+          .controlSize(.small)
+          .accessibilityIdentifier("workspace-reset-saved-state")
+        }
+        Button("Dismiss") {
+          model.dismissWorkspaceNotice()
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .accessibilityIdentifier("workspace-dismiss-notice")
+      }
+    }
+    .padding(.horizontal, 18)
+    .padding(.vertical, 12)
+    .background(
+      RoundedRectangle(cornerRadius: 0, style: .continuous)
+        .fill(Color.white.opacity(0.88))
+    )
+    .overlay {
+      AccessibilityMarkerView(
+        identifier: "workspace-notice-banner",
+        label: notice.title,
+        value: notice.detail
+      )
+    }
+  }
+}
+
 struct WorkspaceToolbar: View {
   @EnvironmentObject private var model: LoopBrowserModel
   @State private var newViewportText = ""
@@ -2027,14 +3609,21 @@ struct WorkspaceToolbar: View {
       }
       .buttonStyle(.bordered)
       .accessibilityIdentifier("inspector-toggle")
+      Button("Reset Saved Workspace") {
+        model.resetSavedWorkspace()
+      }
+      .buttonStyle(.bordered)
+      .accessibilityIdentifier("workspace-reset-saved-state-toolbar")
       Button("Project Settings") {
         model.showProjectSettings = true
       }
       .buttonStyle(.bordered)
+      .accessibilityIdentifier("project-settings-open")
       Button("Open Project") {
         model.chooseProjectFolder()
       }
       .buttonStyle(.bordered)
+      .accessibilityIdentifier("open-project")
     }
     .padding(.horizontal, 18)
     .padding(.vertical, 12)
@@ -2084,14 +3673,21 @@ struct ViewportCardView: View {
     VStack(spacing: 0) {
       header
       ZStack {
-        EmbeddedViewportWebView(
-          controller: controller,
-          accessibilityIdentifier: "viewport-native-web-\(index)",
-          onInteraction: {
-            model.selectViewport(controller.id)
+        if controller.shouldShowPlaceholder {
+          ViewportRuntimePlaceholderView(controller: controller) {
+            model.refreshViewport(viewportID: controller.id)
           }
-        )
           .frame(width: CGFloat(controller.frame.width), height: CGFloat(controller.frame.height - CanvasUI.headerHeight))
+        } else {
+          EmbeddedViewportWebView(
+            controller: controller,
+            accessibilityIdentifier: "viewport-native-web-\(index)",
+            onInteraction: {
+              model.selectViewport(controller.id)
+            }
+          )
+            .frame(width: CGFloat(controller.frame.width), height: CGFloat(controller.frame.height - CanvasUI.headerHeight))
+        }
         Color.clear
           .allowsHitTesting(false)
       }
@@ -2371,6 +3967,8 @@ struct ViewportCardView: View {
 
   private var statusColor: Color {
     switch controller.status {
+    case .restoring:
+      return .secondary
     case .loading:
       return .orange
     case .live:
@@ -2445,13 +4043,102 @@ struct InspectorSidebar: View {
         .font(.caption)
       LabeledContent("Viewports", value: "\(model.viewports.count)")
         .font(.caption)
-      if let error = model.projectError {
-        Text(error)
+      Divider()
+      Text("Local Server")
+        .font(.subheadline.weight(.semibold))
+      LabeledContent("Command", value: model.configuredServerCommand.isEmpty ? "Not set" : model.configuredServerCommand)
+        .font(.caption)
+      LabeledContent("Working Dir", value: model.configuredServerWorkingDirectory.isEmpty ? "." : model.configuredServerWorkingDirectory)
+        .font(.caption)
+      LabeledContent("Ready URL", value: model.effectiveServerReadyURL?.absoluteString ?? "Not set")
+        .font(.caption)
+      LabeledContent("Status", value: model.projectServerState.status.displayLabel)
+        .font(.caption)
+      Text(model.projectServerState.status.displayLabel)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(projectServerStatusColor)
+        .accessibilityIdentifier("project-server-status")
+      if let pid = model.projectServerState.pid {
+        LabeledContent("PID", value: "\(pid)")
+          .font(.caption)
+      }
+      if let exitCode = model.projectServerState.lastExitCode {
+        LabeledContent("Last Exit", value: "\(exitCode)")
+          .font(.caption)
+      }
+      HStack(spacing: 8) {
+        Button("Start Server") {
+          model.startProjectServer()
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.small)
+        .disabled(!model.canStartProjectServer)
+        .accessibilityIdentifier("project-server-start")
+        Button("Stop") {
+          model.stopProjectServer()
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(!model.canStopProjectServer)
+        .accessibilityIdentifier("project-server-stop")
+        Button("Restart") {
+          model.restartProjectServer()
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(!model.canRestartProjectServer)
+        .accessibilityIdentifier("project-server-restart")
+      }
+      Button("Reset Saved Workspace") {
+        model.resetSavedWorkspace()
+      }
+      .buttonStyle(.bordered)
+      .controlSize(.small)
+      .accessibilityIdentifier("workspace-reset-saved-state-inspector")
+      Group {
+        if model.projectServerOutputPreview.isEmpty {
+          Text(
+            model.configuredServerCommand.isEmpty
+              ? "Set Server Command in Project Settings to enable one-click startup."
+              : "Server output will appear here after launch."
+          )
+          .foregroundStyle(.secondary)
+        } else {
+          Text(model.projectServerOutputPreview)
+            .textSelection(.enabled)
+            .accessibilityIdentifier("project-server-output")
+        }
+      }
+      .font(.caption.monospaced())
+      if let serverConfigurationError = model.serverConfigurationError {
+        Text(serverConfigurationError)
+          .font(.caption)
+          .foregroundStyle(.red)
+      }
+      if let serverError = model.projectServerState.lastError {
+        Text(serverError)
           .font(.caption)
           .foregroundStyle(.red)
       }
     }
     .panelCard()
+  }
+
+  private var projectServerStatusColor: Color {
+    switch model.projectServerState.status {
+    case .stopped:
+      return .secondary
+    case .starting:
+      return .orange
+    case .running:
+      return .blue
+    case .ready:
+      return .green
+    case .stopping:
+      return .orange
+    case .failed:
+      return .red
+    }
   }
 
   private var selectedViewportPanel: some View {
@@ -2534,6 +4221,9 @@ struct ProjectSettingsView: View {
   @State private var chromeColor = ""
   @State private var accentColor = ""
   @State private var projectIconPath = ""
+  @State private var serverCommand = ""
+  @State private var serverWorkingDirectory = ""
+  @State private var serverReadyURL = ""
   @State private var loginUsername = ""
   @State private var loginPassword = ""
 
@@ -2588,15 +4278,42 @@ struct ProjectSettingsView: View {
                 swatch(color: chromeColor, label: "Chrome")
                 swatch(color: accentColor, label: "Accent")
               }
-              Button("Save Appearance") {
-                model.saveProjectAppearance(
-                  defaultUrl: defaultURL,
-                  chromeColor: chromeColor,
-                  accentColor: accentColor,
-                  projectIconPath: projectIconPath
-                )
+            }
+          }
+
+          settingsSection(
+            title: "Local Server",
+            subtitle: "Shareable startup command saved in .loop-browser.json. Repo-local env overrides belong in .loop-browser.local.json."
+          ) {
+            VStack(alignment: .leading, spacing: 10) {
+              TextField("Server Command", text: $serverCommand)
+                .textFieldStyle(.roundedBorder)
+              TextField("Working Directory (relative to project root)", text: $serverWorkingDirectory)
+                .textFieldStyle(.roundedBorder)
+              TextField("Ready URL (defaults to Default URL)", text: $serverReadyURL)
+                .textFieldStyle(.roundedBorder)
+              HStack(spacing: 10) {
+                Button("Save Project Settings") {
+                  model.saveProjectAppearance(
+                    defaultUrl: defaultURL,
+                    chromeColor: chromeColor,
+                    accentColor: accentColor,
+                    projectIconPath: projectIconPath,
+                    serverCommand: serverCommand,
+                    serverWorkingDirectory: serverWorkingDirectory,
+                    serverReadyURL: serverReadyURL
+                  )
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Start Server") {
+                  model.startProjectServer()
+                }
+                .buttonStyle(.bordered)
+                .disabled(!model.canStartProjectServer)
               }
-              .buttonStyle(.borderedProminent)
+              Text("Example commands: `bin/dev` for Rails or `/usr/bin/python3 -m http.server 3000` for a static site.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
           }
 
@@ -2641,6 +4358,9 @@ struct ProjectSettingsView: View {
       chromeColor = model.projectConfig.chrome.chromeColor
       accentColor = model.projectConfig.chrome.accentColor
       projectIconPath = model.projectConfig.chrome.projectIconPath ?? ""
+      serverCommand = model.configuredServerCommand
+      serverWorkingDirectory = model.configuredServerWorkingDirectory
+      serverReadyURL = model.configuredServerReadyURL
       loginUsername = model.localCredentials?.username ?? ""
       loginPassword = ""
     }

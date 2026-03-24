@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import XCTest
 
 final class LoopBrowserNativeUITests: XCTestCase {
@@ -45,31 +46,14 @@ final class LoopBrowserNativeUITests: XCTestCase {
 
   private var app: XCUIApplication!
   private var testAppSupportDirectory: URL!
+  private var launchedProjectRoot: URL!
 
   override func setUpWithError() throws {
     continueAfterFailure = false
     testAppSupportDirectory = FileManager.default.temporaryDirectory
       .appendingPathComponent("loop-browser-native-uitests-\(UUID().uuidString)", isDirectory: true)
 
-    app = XCUIApplication()
-    app.launchEnvironment["LOOP_BROWSER_TEST_PROJECT_ROOT"] = fixtureProjectRoot.path
-    app.launchEnvironment["LOOP_BROWSER_TEST_START_URL"] = primaryFixtureURL
-    app.launchEnvironment["LOOP_BROWSER_TEST_SECONDARY_URL"] = secondaryFixtureURL
-    app.launchEnvironment["LOOP_BROWSER_TEST_VIEWPORT_WIDTH"] = "960"
-    app.launchEnvironment["LOOP_BROWSER_TEST_VIEWPORT_HEIGHT"] = "640"
-    app.launchEnvironment["LOOP_BROWSER_TEST_DISABLE_RESTORE"] = "1"
-    app.launchEnvironment["LOOP_BROWSER_TEST_DISABLE_MCP"] = "1"
-    app.launchEnvironment["LOOP_BROWSER_APP_SUPPORT_DIR"] = testAppSupportDirectory.path
-    app.launch()
-
-    waitForViewportChrome(index: 0)
-    waitForViewportChrome(index: 1, includeRightResizeHandle: true)
-    _ = requireOtherElement("canvas-interaction-surface", timeout: 10)
-    _ = waitForWorkspaceState(timeout: 10) { state in
-      state.viewports.count == 2
-    }
-    XCTAssertTrue(requireWebView(labeled: "Primary View", timeout: 10).exists)
-    XCTAssertTrue(requireWebView(labeled: "Secondary View", timeout: 10).exists)
+    launchInteractiveFixtureApp()
   }
 
   func testViewportInputFocusCanReturnToCanvasAndMoveViewport() {
@@ -240,6 +224,118 @@ final class LoopBrowserNativeUITests: XCTestCase {
     dragFixtureCard(index: 0)
   }
 
+  func testProjectServerStartLoadsConfiguredDefaultViewport() throws {
+    guard FileManager.default.isExecutableFile(atPath: "/usr/bin/python3") else {
+      throw XCTSkip("python3 is required for the local server UI test.")
+    }
+
+    app.terminate()
+    let serverProject = try makeServerBackedFixtureProject()
+    launchApp(projectRoot: serverProject.projectRoot)
+
+    waitForViewportChrome(index: 0)
+    _ = waitForWorkspaceState(timeout: 10) { state in
+      state.viewports.count == 1
+    }
+
+    let startButton = requireButton("project-server-start", timeout: 10)
+    startButton.click()
+
+    waitForElementLabel(identifier: "project-server-status", expected: "Ready", timeout: 15)
+
+    let incrementButton = app.webViews.buttons["Increment Counter"].firstMatch
+    XCTAssertTrue(incrementButton.waitForExistence(timeout: 15), "Expected served fixture controls to appear after starting the project server")
+  }
+
+  func testProjectServerReconcilesStaleProcessOnNextLaunchAfterAppTerminates() throws {
+    guard FileManager.default.isExecutableFile(atPath: "/usr/bin/python3") else {
+      throw XCTSkip("python3 is required for the local server termination UI test.")
+    }
+
+    app.terminate()
+    let serverProject = try makeServerBackedFixtureProject()
+    launchApp(projectRoot: serverProject.projectRoot)
+
+    waitForViewportChrome(index: 0)
+    _ = waitForWorkspaceState(timeout: 10) { state in
+      state.viewports.count == 1
+    }
+
+    requireButton("project-server-start", timeout: 10).click()
+    waitForElementLabel(identifier: "project-server-status", expected: "Ready", timeout: 15)
+    XCTAssertFalse(isLocalPortAvailable(serverProject.port))
+
+    app.terminate()
+
+    launchApp(projectRoot: serverProject.projectRoot)
+    waitForViewportChrome(index: 0)
+    XCTAssertTrue(
+      waitForLocalPortAvailability(serverProject.port, timeout: 10),
+      "Expected the reopened project to reconcile and stop any stale managed server."
+    )
+    requireButton("project-server-start", timeout: 10).click()
+    waitForElementLabel(identifier: "project-server-status", expected: "Ready", timeout: 15)
+  }
+
+  func testPoisonedWorkspaceStateOpensInSafeModeWithoutBlockingToolbar() throws {
+    app.terminate()
+    let poisonedProjectRoot = try makeCopiedFixtureProject(prefix: "loop-browser-native-poisoned-workspace")
+    try writeRawWorkspaceState("{ definitely-not-valid-json", projectRoot: poisonedProjectRoot)
+
+    launchApp(
+      projectRoot: poisonedProjectRoot,
+      startURL: primaryFixtureURL,
+      secondaryURL: secondaryFixtureURL,
+      disableRestore: false
+    )
+
+    _ = requireOtherElement("workspace-notice-banner", timeout: 10)
+    XCTAssertFalse(quarantinedWorkspaceStateFileURLs().isEmpty)
+
+    requireButton("project-settings-open", timeout: 10).click()
+    XCTAssertTrue(app.staticTexts["Project Settings"].waitForExistence(timeout: 5))
+    app.buttons["Close"].firstMatch.click()
+
+    requireButton("workspace-reset-saved-state", timeout: 10).click()
+    XCTAssertTrue(
+      waitForNonExistence(
+        of: app.descendants(matching: .any).matching(identifier: "workspace-notice-banner").firstMatch,
+        timeout: 10
+      )
+    )
+
+    waitForViewportChrome(index: 0)
+    waitForViewportChrome(index: 1, includeRightResizeHandle: true)
+    let restoredState = waitForWorkspaceState(timeout: 10) { state in
+      state.viewports.count == 2
+    }
+    XCTAssertEqual(restoredState.viewports.count, 2)
+
+    let zoomedState = zoomOut(times: 1)
+    XCTAssertLessThan(zoomedState.canvasScale, 1)
+  }
+
+  func testFailedServerStartDoesNotBlockWorkspaceControls() throws {
+    app.terminate()
+    let failingProjectRoot = try makeFailingServerFixtureProject()
+    launchApp(projectRoot: failingProjectRoot)
+
+    waitForViewportChrome(index: 0)
+    _ = waitForWorkspaceState(timeout: 10) { state in
+      state.viewports.count == 1
+    }
+
+    requireButton("project-server-start", timeout: 10).click()
+    waitForElementLabel(identifier: "project-server-status", expected: "Failed", timeout: 10)
+
+    requireButton("project-settings-open", timeout: 10).click()
+    XCTAssertTrue(app.staticTexts["Project Settings"].waitForExistence(timeout: 5))
+    app.buttons["Close"].firstMatch.click()
+
+    let zoomedState = zoomOut(times: 1)
+    XCTAssertLessThan(zoomedState.canvasScale, 1)
+  }
+
   private var nativeMacOSRoot: URL {
     URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()
@@ -277,6 +373,130 @@ final class LoopBrowserNativeUITests: XCTestCase {
       URLQueryItem(name: "variant", value: variant),
     ]
     return components.url!.absoluteString
+  }
+
+  private func launchInteractiveFixtureApp() {
+    launchApp(
+      projectRoot: fixtureProjectRoot,
+      startURL: primaryFixtureURL,
+      secondaryURL: secondaryFixtureURL
+    )
+
+    waitForViewportChrome(index: 0)
+    waitForViewportChrome(index: 1, includeRightResizeHandle: true)
+    _ = requireOtherElement("canvas-interaction-surface", timeout: 10)
+    _ = waitForWorkspaceState(timeout: 10) { state in
+      state.viewports.count == 2
+    }
+    XCTAssertTrue(requireWebView(labeled: "Primary View", timeout: 10).exists)
+    XCTAssertTrue(requireWebView(labeled: "Secondary View", timeout: 10).exists)
+  }
+
+  private func launchApp(
+    projectRoot: URL,
+    startURL: String? = nil,
+    secondaryURL: String? = nil,
+    disableRestore: Bool = true
+  ) {
+    launchedProjectRoot = projectRoot
+    app = XCUIApplication()
+    app.launchEnvironment["LOOP_BROWSER_TEST_PROJECT_ROOT"] = projectRoot.path
+    if let startURL {
+      app.launchEnvironment["LOOP_BROWSER_TEST_START_URL"] = startURL
+    }
+    if let secondaryURL {
+      app.launchEnvironment["LOOP_BROWSER_TEST_SECONDARY_URL"] = secondaryURL
+    }
+    if startURL != nil || secondaryURL != nil {
+      app.launchEnvironment["LOOP_BROWSER_TEST_VIEWPORT_WIDTH"] = "960"
+      app.launchEnvironment["LOOP_BROWSER_TEST_VIEWPORT_HEIGHT"] = "640"
+    }
+    if disableRestore {
+      app.launchEnvironment["LOOP_BROWSER_TEST_DISABLE_RESTORE"] = "1"
+    }
+    app.launchEnvironment["LOOP_BROWSER_TEST_DISABLE_MCP"] = "1"
+    app.launchEnvironment["LOOP_BROWSER_APP_SUPPORT_DIR"] = testAppSupportDirectory.path
+    app.launch()
+  }
+
+  private func makeServerBackedFixtureProject() throws -> (projectRoot: URL, port: Int) {
+    let projectRoot = try makeCopiedFixtureProject(prefix: "loop-browser-native-server-fixture")
+    let port = try availableLocalPort()
+    let defaultURL = "http://127.0.0.1:\(port)/interactive-fixture.html?title=Server%20View&subtitle=Served%20by%20Loop%20Browser&variant=server"
+    let readyURL = "http://127.0.0.1:\(port)/interactive-fixture.html"
+    let configJSON = """
+    {
+      "version": 1,
+      "chrome": {
+        "accentColor": "#0A84FF",
+        "chromeColor": "#FAFBFD",
+        "projectIconPath": null
+      },
+      "startup": {
+        "defaultUrl": "\(defaultURL)",
+        "server": {
+          "command": "/usr/bin/python3 -u -m http.server \(port) --bind 127.0.0.1",
+          "readyUrl": "\(readyURL)"
+        }
+      }
+    }
+    """
+    try configJSON.write(
+      to: projectRoot.appendingPathComponent(".loop-browser.json"),
+      atomically: true,
+      encoding: .utf8
+    )
+
+    return (projectRoot, port)
+  }
+
+  private func makeFailingServerFixtureProject() throws -> URL {
+    let projectRoot = try makeCopiedFixtureProject(prefix: "loop-browser-native-failing-server-fixture")
+    let defaultURL =
+      "http://127.0.0.1:39999/interactive-fixture.html?title=Failure%20View&subtitle=Unavailable&variant=failure"
+    let configJSON = """
+    {
+      "version": 1,
+      "chrome": {
+        "accentColor": "#0A84FF",
+        "chromeColor": "#FAFBFD",
+        "projectIconPath": null
+      },
+      "startup": {
+        "defaultUrl": "\(defaultURL)",
+        "server": {
+          "command": "print -r -- \\"Installing foreman...\\" && print -r -- \\"boom\\" && exit 127"
+        }
+      }
+    }
+    """
+    try configJSON.write(
+      to: projectRoot.appendingPathComponent(".loop-browser.json"),
+      atomically: true,
+      encoding: .utf8
+    )
+
+    return projectRoot
+  }
+
+  private func makeCopiedFixtureProject(prefix: String) throws -> URL {
+    let projectRoot = FileManager.default.temporaryDirectory
+      .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.copyItem(at: fixtureProjectRoot, to: projectRoot)
+    addTeardownBlock {
+      try? FileManager.default.removeItem(at: projectRoot)
+    }
+    return projectRoot
+  }
+
+  private func writeRawWorkspaceState(_ contents: String, projectRoot: URL) throws {
+    launchedProjectRoot = projectRoot
+    let workspaceURL = workspaceStateFileURL()
+    try FileManager.default.createDirectory(
+      at: workspaceURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try contents.write(to: workspaceURL, atomically: true, encoding: .utf8)
   }
 
   private func focusViewportInput(index: Int, text: String) {
@@ -858,6 +1078,23 @@ final class LoopBrowserNativeUITests: XCTestCase {
     return webView.staticTexts["Last Action: \(action)"].waitForExistence(timeout: timeout)
   }
 
+  private func waitForElementLabel(identifier: String, expected: String, timeout: TimeInterval = 5) {
+    let element = requireAnyElement(identifier, timeout: timeout)
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+      let label = element.label.trimmingCharacters(in: .whitespacesAndNewlines)
+      if label == expected {
+        return
+      }
+      let value = (element.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+      if value == expected {
+        return
+      }
+      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    XCTFail("Timed out waiting for \(identifier) label to equal \(expected). Last label: \(element.label)")
+  }
+
   private func workspaceStateFileURL() -> URL {
     testAppSupportDirectory
       .appendingPathComponent("projects", isDirectory: true)
@@ -865,15 +1102,87 @@ final class LoopBrowserNativeUITests: XCTestCase {
       .appendingPathComponent("workspace-state.json")
   }
 
+  private func quarantinedWorkspaceStateFileURLs() -> [URL] {
+    let projectDirectory = workspaceStateFileURL().deletingLastPathComponent()
+    let urls = (try? FileManager.default.contentsOfDirectory(
+      at: projectDirectory,
+      includingPropertiesForKeys: nil
+    )) ?? []
+    return urls.filter { $0.lastPathComponent.contains(".invalid-workspace-state.json") }
+  }
+
   private var projectSessionSlug: String {
-    let base = fixtureProjectRoot.lastPathComponent.lowercased()
+    let base = launchedProjectRoot.lastPathComponent.lowercased()
       .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
       .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-    let hash = SHA256.hash(data: Data(fixtureProjectRoot.path.utf8))
+    let hash = SHA256.hash(data: Data(launchedProjectRoot.path.utf8))
       .compactMap { String(format: "%02x", $0) }
       .joined()
       .prefix(8)
     let prefix = base.isEmpty ? "project" : String(base.prefix(36))
     return "\(prefix)-\(hash)"
+  }
+
+  @discardableResult
+  private func requireAnyElement(_ identifier: String, timeout: TimeInterval = 5) -> XCUIElement {
+    let query = app.descendants(matching: .any).matching(identifier: identifier)
+    let element = query.firstMatch
+    XCTAssertTrue(element.waitForExistence(timeout: timeout), "Expected element \(identifier) to exist")
+    return element
+  }
+
+  private func availableLocalPort() throws -> Int {
+    let lowerBound = 49152
+    let upperBound = 65535
+    let candidateCount = upperBound - lowerBound
+    let startingOffset = abs(Int(ProcessInfo.processInfo.processIdentifier) * 97) % candidateCount
+
+    for offset in 0..<128 {
+      let candidate = lowerBound + ((startingOffset + (offset * 211)) % candidateCount)
+      if isLocalPortAvailable(candidate) {
+        return candidate
+      }
+    }
+
+    throw XCTSkip("Could not find an available localhost port for UI testing.")
+  }
+
+  private func isLocalPortAvailable(_ port: Int) -> Bool {
+    let socketHandle = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+    guard socketHandle >= 0 else {
+      return false
+    }
+    defer {
+      _ = Darwin.close(socketHandle)
+    }
+
+    var address = sockaddr_in()
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = in_port_t(UInt16(port).bigEndian)
+    address.sin_addr = in_addr(s_addr: Darwin.inet_addr("127.0.0.1"))
+
+    let connectResult = withUnsafePointer(to: &address) { pointer in
+      pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { reboundPointer in
+        Darwin.connect(socketHandle, reboundPointer, socklen_t(MemoryLayout<sockaddr_in>.size))
+      }
+    }
+
+    if connectResult == 0 {
+      return false
+    }
+
+    return errno == ECONNREFUSED
+  }
+
+  private func waitForLocalPortAvailability(_ port: Int, timeout: TimeInterval) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+      if isLocalPortAvailable(port) {
+        return true
+      }
+      RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    }
+    return isLocalPortAvailable(port)
   }
 }
