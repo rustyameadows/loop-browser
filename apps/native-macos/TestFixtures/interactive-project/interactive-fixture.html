@@ -155,6 +155,16 @@
         grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
       }
 
+      .quick-controls {
+        display: grid;
+        gap: 14px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .input-card {
+        cursor: text;
+      }
+
       .metric {
         padding: 18px;
         border-radius: 22px;
@@ -297,34 +307,39 @@
   </head>
   <body>
     <main class="stack">
-      <section class="surface hero">
-        <div class="hero-grid">
-          <div class="hero-head">
-            <div class="eyebrow" id="fixture-variant-badge">Canvas Review</div>
-            <p id="fixture-subtitle">Interactive fixture for native Loop Browser UI tests.</p>
+      <section class="surface controls">
+        <div class="panel-head">
+          <div class="stack">
+            <h2>Viewport controls</h2>
+            <p>These controls intentionally steal focus so the native canvas has to reclaim it.</p>
           </div>
-          <div class="hero-copy">
-            <h1 id="fixture-title">Loop Interactive Fixture</h1>
-            <p id="fixture-description">
-              This page behaves like a small local project so the macOS canvas app can prove that
-              viewport focus, canvas control, dragging, resizing, and repeated zoom or pan chains
-              still work when everything happens together.
-            </p>
-          </div>
-          <div class="metrics">
-            <article class="metric">
-              <p>Viewport focus traps</p>
-              <strong>1 regression path</strong>
-            </article>
-            <article class="metric">
-              <p>Canvas gestures</p>
-              <strong>Pan + zoom + drag</strong>
-            </article>
-            <article class="metric">
-              <p>Fixture variants</p>
-              <strong id="variant-count">2 seeded views</strong>
-            </article>
-          </div>
+        </div>
+
+        <div class="quick-controls">
+          <article class="control-card stack">
+            <button id="increment-button" type="button" aria-label="Increment Counter">Increment Counter</button>
+            <p id="counter-value" class="counter">Counter: 0</p>
+          </article>
+
+          <article
+            class="control-card stack input-card"
+            id="input-card"
+            aria-label="Fixture Input Panel"
+          >
+            <label for="fixture-input">Fixture Input</label>
+            <input
+              id="fixture-input"
+              aria-label="Fixture Input"
+              autocapitalize="off"
+              autocomplete="off"
+              autocorrect="off"
+              placeholder="Type into the viewport"
+              spellcheck="false"
+              type="text"
+            />
+            <p id="focus-status">Input Focus: blurred</p>
+            <p id="last-action">Last Action: ready</p>
+          </article>
         </div>
       </section>
 
@@ -368,20 +383,19 @@
 
             <div class="control-group">
               <article class="control-card stack">
-                <button id="increment-button" type="button" aria-label="Increment Counter">Increment Counter</button>
-                <p id="counter-value" class="counter">Counter: 0</p>
+                <p class="counter">Pinned controls above drive the live viewport state.</p>
+                <p>
+                  The native stress test now starts from a visible, above-the-fold input and
+                  button instead of trying to scroll into them first.
+                </p>
               </article>
 
               <article class="control-card stack">
-                <label for="fixture-input">Fixture Input</label>
-                <input
-                  id="fixture-input"
-                  aria-label="Fixture Input"
-                  placeholder="Type into the viewport"
-                  type="text"
-                />
-                <p id="focus-status">Input Focus: blurred</p>
-                <p id="last-action">Last Action: ready</p>
+                <strong>Canvas handoff</strong>
+                <p>
+                  The real workflow still begins by focusing the live viewport input, then proving
+                  the app can return to canvas zoom, pan, drag, and resize without freezing.
+                </p>
               </article>
             </div>
           </section>
@@ -416,6 +430,37 @@
             </div>
           </section>
         </aside>
+      </section>
+
+      <section class="surface hero">
+        <div class="hero-grid">
+          <div class="hero-head">
+            <div class="eyebrow" id="fixture-variant-badge">Canvas Review</div>
+            <p id="fixture-subtitle">Interactive fixture for native Loop Browser UI tests.</p>
+          </div>
+          <div class="hero-copy">
+            <h1 id="fixture-title">Loop Interactive Fixture</h1>
+            <p id="fixture-description">
+              This page behaves like a small local project so the macOS canvas app can prove that
+              viewport focus, canvas control, dragging, resizing, and repeated zoom or pan chains
+              still work when everything happens together.
+            </p>
+          </div>
+          <div class="metrics">
+            <article class="metric">
+              <p>Viewport focus traps</p>
+              <strong>1 regression path</strong>
+            </article>
+            <article class="metric">
+              <p>Canvas gestures</p>
+              <strong>Pan + zoom + drag</strong>
+            </article>
+            <article class="metric">
+              <p>Fixture variants</p>
+              <strong id="variant-count">2 seeded views</strong>
+            </article>
+          </div>
+        </div>
       </section>
 
       <section class="surface footer-copy">
@@ -471,12 +516,19 @@
         });
 
         const fixtureInput = document.getElementById("fixture-input");
+        const inputCard = document.getElementById("input-card");
         fixtureInput.addEventListener("focus", () => {
           focusStatus.textContent = "Input Focus: focused";
           lastAction.textContent = "Last Action: input-focus";
         });
         fixtureInput.addEventListener("blur", () => {
           focusStatus.textContent = "Input Focus: blurred";
+        });
+        inputCard.addEventListener("pointerdown", (event) => {
+          if (event.target !== fixtureInput) {
+            fixtureInput.focus({ preventScroll: true });
+            fixtureInput.select();
+          }
         });
 
         const dragSurface = document.getElementById("drag-surface");

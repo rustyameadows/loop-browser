@@ -9,23 +9,26 @@ APP_PATH="$BUILD_OUTPUT_PATH/LoopBrowserNative.app"
 HANDOFF_APP_PATH="$ROOT_DIR/output/Loop Browser.app"
 HANDOFF_ZIP_PATH="$ROOT_DIR/output/Loop Browser-macOS.zip"
 SUPPORT_PACKAGE_PATH="$ROOT_DIR/apps/native-macos/LoopBrowserNativeSupport"
+RUN_PACKAGE_TESTS="${RUN_PACKAGE_TESTS:-0}"
 
 mkdir -p "$ROOT_DIR/output/native" "$ROOT_DIR/output"
 rm -rf "$DERIVED_DATA_PATH" "$HANDOFF_APP_PATH" "$HANDOFF_ZIP_PATH"
 
-(
-  cd "$SUPPORT_PACKAGE_PATH"
-  HOME=/tmp SWIFTPM_ENABLE_PLUGIN_LOADING=0 CLANG_MODULE_CACHE_PATH=/tmp/clang-module-cache swift test
-)
+if [[ "$RUN_PACKAGE_TESTS" == "1" ]]; then
+  (
+    cd "$SUPPORT_PACKAGE_PATH"
+    HOME=/tmp SWIFTPM_ENABLE_PLUGIN_LOADING=0 CLANG_MODULE_CACHE_PATH=/tmp/clang-module-cache swift test
+  )
 
-HOME=/tmp xcodebuild \
-  -project "$PROJECT_PATH" \
-  -scheme LoopBrowserNative \
-  -destination "platform=macOS,arch=arm64" \
-  -derivedDataPath "$DERIVED_DATA_PATH" \
-  CODE_SIGN_IDENTITY="-" \
-  CODE_SIGNING_ALLOWED=YES \
-  test
+  HOME=/tmp xcodebuild \
+    -project "$PROJECT_PATH" \
+    -scheme LoopBrowserNative \
+    -destination "platform=macOS,arch=arm64" \
+    -derivedDataPath "$DERIVED_DATA_PATH" \
+    CODE_SIGN_IDENTITY="-" \
+    CODE_SIGNING_ALLOWED=YES \
+    test
+fi
 
 HOME=/tmp xcodebuild \
   -project "$PROJECT_PATH" \

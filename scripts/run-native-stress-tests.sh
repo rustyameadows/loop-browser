@@ -21,7 +21,7 @@ HOME=/tmp xcodebuild test \
   -derivedDataPath "$DERIVED_DATA_PATH" \
   -resultBundlePath "$RESULT_BUNDLE_PATH" \
   -destination "platform=macOS,arch=arm64" \
-  -only-testing:LoopBrowserNativeUITests/testViewportInputFocusCanReturnToCanvasAndMoveViewport \
-  -only-testing:LoopBrowserNativeUITests/testCompositeCanvasWorkflowRemainsInteractive | tee "$LOG_PATH"
+  -only-testing:LoopBrowserNativeUITests/LoopBrowserNativeUITests/testViewportInputFocusCanReturnToCanvasAndMoveViewport \
+  -only-testing:LoopBrowserNativeUITests/LoopBrowserNativeUITests/testCompositeCanvasWorkflowRemainsInteractive | tee "$LOG_PATH"
 
 echo "Completed native stress tests."

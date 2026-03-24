@@ -293,6 +293,110 @@ final class AccessibilityMarkerNSView: NSView {
   }
 }
 
+struct DragCaptureSurface: NSViewRepresentable {
+  var identifier: String
+  var label: String
+  var onPress: () -> Void
+  var onDragChanged: (CGSize) -> Void
+  var onDragEnded: () -> Void
+
+  func makeNSView(context: Context) -> DragCaptureNSView {
+    let view = DragCaptureNSView()
+    view.wantsLayer = true
+    view.layer?.backgroundColor = NSColor.clear.cgColor
+    return view
+  }
+
+  func updateNSView(_ nsView: DragCaptureNSView, context: Context) {
+    nsView.onPress = onPress
+    nsView.onDragChanged = onDragChanged
+    nsView.onDragEnded = onDragEnded
+    nsView.setAccessibilityElement(true)
+    nsView.setAccessibilityIdentifier(identifier)
+    nsView.setAccessibilityLabel(label)
+  }
+}
+
+final class DragCaptureNSView: NSView {
+  var onPress: (() -> Void)?
+  var onDragChanged: ((CGSize) -> Void)?
+  var onDragEnded: (() -> Void)?
+
+  private var dragOriginInWindow: CGPoint?
+  private var didDrag = false
+
+  override var isFlipped: Bool { true }
+  override var acceptsFirstResponder: Bool { true }
+
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+    true
+  }
+
+  override func mouseDown(with event: NSEvent) {
+    dragOriginInWindow = event.locationInWindow
+    didDrag = false
+    onPress?()
+  }
+
+  override func mouseDragged(with event: NSEvent) {
+    guard let dragOriginInWindow else { return }
+    didDrag = true
+    let currentPoint = event.locationInWindow
+    onDragChanged?(
+      CGSize(
+        width: currentPoint.x - dragOriginInWindow.x,
+        height: dragOriginInWindow.y - currentPoint.y
+      )
+    )
+  }
+
+  override func mouseUp(with event: NSEvent) {
+    if didDrag {
+      onDragEnded?()
+    }
+    dragOriginInWindow = nil
+    didDrag = false
+  }
+}
+
+@MainActor
+func reclaimWindowInputFocus(preferredResponder: NSResponder? = nil) {
+  let candidateWindow =
+    (preferredResponder as? NSView)?.window
+    ?? NSApp.keyWindow
+    ?? NSApp.mainWindow
+
+  guard let candidateWindow else { return }
+
+  if let preferredResponder {
+    _ = candidateWindow.makeFirstResponder(preferredResponder)
+  } else {
+    _ = candidateWindow.makeFirstResponder(nil)
+  }
+}
+
+@MainActor
+func activateNativeTestWindowIfNeeded() {
+  guard NativeLaunchOptions.current.projectRoot != nil else { return }
+
+  func activate() {
+    NSApp.activate(ignoringOtherApps: true)
+    NSApp.windows.forEach { window in
+      window.makeKeyAndOrderFront(nil)
+    }
+  }
+
+  activate()
+  DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+    activate()
+  }
+}
+
+func nativeUITestDebugLog(_ message: @autoclosure () -> String) {
+  guard NativeLaunchOptions.current.projectRoot != nil else { return }
+  print("[NativeUITestDebug] \(message())")
+}
+
 struct NativeLaunchOptions {
   var projectRoot: URL?
   var startupURLs: [String]
@@ -363,7 +467,7 @@ final class ViewportController: NSObject, ObservableObject, Identifiable, WKNavi
     self.lastRefreshedAt = snapshot.lastRefreshedAt
     let configuration = WKWebViewConfiguration()
     configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
-    self.webView = WKWebView(frame: .zero, configuration: configuration)
+    self.webView = FocusableViewportWebView(frame: .zero, configuration: configuration)
     super.init()
     self.webView.navigationDelegate = self
     if let url = URL(string: snapshot.urlString) {
@@ -618,19 +722,41 @@ final class ViewportController: NSObject, ObservableObject, Identifiable, WKNavi
   }
 }
 
+final class FocusableViewportWebView: WKWebView {
+  var onInteraction: (() -> Void)?
+
+  override var acceptsFirstResponder: Bool { true }
+
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+    true
+  }
+
+  override func mouseDown(with event: NSEvent) {
+    onInteraction?()
+    if window?.firstResponder !== self {
+      window?.makeFirstResponder(nil)
+      window?.makeFirstResponder(self)
+    }
+    super.mouseDown(with: event)
+  }
+}
+
 struct EmbeddedViewportWebView: NSViewRepresentable {
   @ObservedObject var controller: ViewportController
   var accessibilityIdentifier: String
+  var onInteraction: (() -> Void)? = nil
 
   func makeNSView(context: Context) -> WKWebView {
     controller.webView.setAccessibilityIdentifier(accessibilityIdentifier)
     controller.webView.setAccessibilityLabel(controller.label)
+    (controller.webView as? FocusableViewportWebView)?.onInteraction = onInteraction
     return controller.webView
   }
 
   func updateNSView(_ nsView: WKWebView, context: Context) {
     nsView.setAccessibilityIdentifier(accessibilityIdentifier)
     nsView.setAccessibilityLabel(controller.label)
+    (nsView as? FocusableViewportWebView)?.onInteraction = onInteraction
   }
 }
 
@@ -642,11 +768,6 @@ struct CanvasInteractionSurface: NSViewRepresentable {
   var onPanEnded: () -> Void
   var onScrollPan: (CGFloat, CGFloat) -> Void
   var onPinchZoom: (CGPoint, CGFloat) -> Void
-  var onViewportSelected: (UUID) -> Void
-  var onViewportDragged: (UUID, CGPoint) -> Void
-  var onViewportDragEnded: (UUID) -> Void
-  var onViewportResized: (UUID, ViewportFrame) -> Void
-  var onViewportResizeEnded: (UUID) -> Void
 
   func makeNSView(context: Context) -> CanvasInteractionNSView {
     let view = CanvasInteractionNSView()
@@ -665,19 +786,12 @@ struct CanvasInteractionSurface: NSViewRepresentable {
     nsView.router.onPanEnded = onPanEnded
     nsView.router.onScrollPan = onScrollPan
     nsView.router.onPinchZoom = onPinchZoom
-    nsView.router.onViewportSelected = onViewportSelected
-    nsView.router.onViewportDragged = onViewportDragged
-    nsView.router.onViewportDragEnded = onViewportDragEnded
-    nsView.router.onViewportResized = onViewportResized
-    nsView.router.onViewportResizeEnded = onViewportResizeEnded
   }
 }
 
 final class CanvasInputRouter {
   enum Interaction {
     case canvasPan(originViewportPoint: CGPoint, originCanvasOffset: CGSize)
-    case viewportDrag(id: UUID, grabOffset: CGSize)
-    case viewportResize(id: UUID, handle: ViewportResizeHandle, originFrame: ViewportFrame, startCanvasPoint: CGPoint)
   }
 
   var transform = CanvasTransform(scale: 1, offset: .zero)
@@ -688,63 +802,32 @@ final class CanvasInputRouter {
   var onPanEnded: (() -> Void)?
   var onScrollPan: ((CGFloat, CGFloat) -> Void)?
   var onPinchZoom: ((CGPoint, CGFloat) -> Void)?
-  var onViewportSelected: ((UUID) -> Void)?
-  var onViewportDragged: ((UUID, CGPoint) -> Void)?
-  var onViewportDragEnded: ((UUID) -> Void)?
-  var onViewportResized: ((UUID, ViewportFrame) -> Void)?
-  var onViewportResizeEnded: ((UUID) -> Void)?
 
   private var activeInteraction: Interaction?
 
   func shouldIntercept(_ viewportPoint: CGPoint) -> Bool {
-    switch hitMap.region(at: viewportPoint) {
-    case .emptyCanvas, .viewportHeader, .viewportHandle:
+    if case .emptyCanvas = hitMap.region(at: viewportPoint) {
       return true
-    case .viewportPassthrough:
-      return false
     }
+    return false
   }
 
   func mouseDown(at viewportPoint: CGPoint) {
-    switch hitMap.region(at: viewportPoint) {
-    case .emptyCanvas:
-      onCanvasMouseDown?()
-      activeInteraction = .canvasPan(
-        originViewportPoint: viewportPoint,
-        originCanvasOffset: transform.offset
-      )
-    case .viewportHeader(let viewportID):
-      guard let frame = hitMap.frame(for: viewportID) else { return }
-      onViewportSelected?(viewportID)
-      let canvasPoint = CanvasInteractionMath.canvasPoint(
-        viewportPoint: viewportPoint,
-        transform: transform
-      )
-      activeInteraction = .viewportDrag(
-        id: viewportID,
-        grabOffset: CGSize(
-          width: canvasPoint.x - frame.x,
-          height: canvasPoint.y - frame.y
-        )
-      )
-    case .viewportHandle(let viewportID, let handle):
-      guard let frame = hitMap.frame(for: viewportID) else { return }
-      onViewportSelected?(viewportID)
-      activeInteraction = .viewportResize(
-        id: viewportID,
-        handle: handle,
-        originFrame: frame,
-        startCanvasPoint: CanvasInteractionMath.canvasPoint(
-          viewportPoint: viewportPoint,
-          transform: transform
-        )
-      )
-    case .viewportPassthrough:
+    let region = hitMap.region(at: viewportPoint)
+    nativeUITestDebugLog("CanvasInputRouter.mouseDown point=\(viewportPoint) region=\(String(describing: region))")
+    guard case .emptyCanvas = region else {
       activeInteraction = nil
+      return
     }
+
+    onCanvasMouseDown?()
+    activeInteraction = .canvasPan(
+      originViewportPoint: viewportPoint,
+      originCanvasOffset: transform.offset
+    )
   }
 
-  func mouseDragged(to viewportPoint: CGPoint, modifierFlags: NSEvent.ModifierFlags) {
+  func mouseDragged(to viewportPoint: CGPoint) {
     switch activeInteraction {
     case .canvasPan(let originViewportPoint, let originCanvasOffset):
       let translation = CGSize(
@@ -752,28 +835,6 @@ final class CanvasInputRouter {
         height: viewportPoint.y - originViewportPoint.y
       )
       onPanChanged?(originCanvasOffset, translation)
-    case .viewportDrag(let viewportID, let grabOffset):
-      let currentCanvasPoint = CanvasInteractionMath.canvasPoint(
-        viewportPoint: viewportPoint,
-        transform: transform
-      )
-      let origin = CanvasInteractionMath.draggedViewportOrigin(
-        currentCanvasPoint: currentCanvasPoint,
-        grabOffset: grabOffset
-      )
-      onViewportDragged?(viewportID, origin)
-    case .viewportResize(let viewportID, let handle, let originFrame, let startCanvasPoint):
-      let currentCanvasPoint = CanvasInteractionMath.canvasPoint(
-        viewportPoint: viewportPoint,
-        transform: transform
-      )
-      let nextFrame = handle.resizedFrame(
-        from: originFrame,
-        deltaX: currentCanvasPoint.x - startCanvasPoint.x,
-        deltaY: currentCanvasPoint.y - startCanvasPoint.y,
-        symmetric: modifierFlags.contains(.shift)
-      )
-      onViewportResized?(viewportID, nextFrame)
     case .none:
       break
     }
@@ -783,10 +844,6 @@ final class CanvasInputRouter {
     switch activeInteraction {
     case .canvasPan:
       onPanEnded?()
-    case .viewportDrag(let viewportID, _):
-      onViewportDragEnded?(viewportID)
-    case .viewportResize(let viewportID, _, _, _):
-      onViewportResizeEnded?(viewportID)
     case .none:
       break
     }
@@ -819,14 +876,14 @@ final class CanvasInteractionNSView: NSView {
   }
 
   override func mouseDown(with event: NSEvent) {
-    router.mouseDown(at: convert(event.locationInWindow, from: nil))
+    reclaimWindowInputFocus(preferredResponder: self)
+    let point = convert(event.locationInWindow, from: nil)
+    nativeUITestDebugLog("CanvasInteractionNSView.mouseDown locationInWindow=\(event.locationInWindow) converted=\(point)")
+    router.mouseDown(at: point)
   }
 
   override func mouseDragged(with event: NSEvent) {
-    router.mouseDragged(
-      to: convert(event.locationInWindow, from: nil),
-      modifierFlags: event.modifierFlags
-    )
+    router.mouseDragged(to: convert(event.locationInWindow, from: nil))
   }
 
   override func mouseUp(with event: NSEvent) {
@@ -1127,14 +1184,18 @@ final class LoopBrowserModel: ObservableObject {
     persistWorkspaceState()
   }
 
-  func selectViewport(_ viewportID: UUID?) {
+  func selectViewport(_ viewportID: UUID?, syncKeyboardFocus: Bool = true) {
     selectedViewportID = viewportID
+    guard syncKeyboardFocus else { return }
+    self.syncKeyboardFocus(with: viewportID)
   }
 
   func updateViewportOrigin(viewportID: UUID, origin: CGPoint) {
     guard let viewport = viewports.first(where: { $0.id == viewportID }) else { return }
-    viewport.frame.x = origin.x
-    viewport.frame.y = origin.y
+    var updatedFrame = viewport.frame
+    updatedFrame.x = origin.x
+    updatedFrame.y = origin.y
+    viewport.frame = updatedFrame
     selectedViewportID = viewportID
   }
 
@@ -1156,6 +1217,23 @@ final class LoopBrowserModel: ObservableObject {
     selectedViewportID = viewportID
     persistWorkspaceState()
     recordAction("Viewport", detail: "Resized \(viewport.label)", success: true)
+  }
+
+  private func syncKeyboardFocus(with viewportID: UUID?) {
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+
+      guard let viewportID,
+            let viewport = self.viewports.first(where: { $0.id == viewportID })
+      else {
+        (NSApp.keyWindow ?? NSApp.mainWindow)?.makeFirstResponder(nil)
+        return
+      }
+
+      let window = viewport.webView.window ?? NSApp.keyWindow ?? NSApp.mainWindow
+      window?.makeFirstResponder(nil)
+      window?.makeFirstResponder(viewport.webView)
+    }
   }
 
   func scheduleWorkspacePersistence() {
@@ -1253,8 +1331,10 @@ final class LoopBrowserModel: ObservableObject {
 
   func updateViewportSize(viewportID: UUID, width: Double, height: Double) {
     guard let viewport = viewports.first(where: { $0.id == viewportID }) else { return }
-    viewport.frame.width = max(320, width)
-    viewport.frame.height = max(240, height)
+    var updatedFrame = viewport.frame
+    updatedFrame.width = max(320, width)
+    updatedFrame.height = max(240, height)
+    viewport.frame = updatedFrame
     persistWorkspaceState()
     recordAction("Viewport", detail: "Resized \(viewport.label) to \(Int(width))×\(Int(height))", success: true)
   }
@@ -1690,6 +1770,10 @@ final class LoopBrowserModel: ObservableObject {
         staggerIndex: seed.staggerIndex
       )
     }
+
+    if let firstViewportID = viewports.first?.id {
+      selectViewport(firstViewportID)
+    }
   }
 }
 
@@ -1863,26 +1947,9 @@ struct WorkspaceCanvasView: View {
             },
             onPinchZoom: { point, zoomFactor in
               model.zoomCanvas(around: point, zoomFactor: zoomFactor)
-            },
-            onViewportSelected: { viewportID in
-              model.selectViewport(viewportID)
-            },
-            onViewportDragged: { viewportID, origin in
-              model.updateViewportOrigin(viewportID: viewportID, origin: origin)
-            },
-            onViewportDragEnded: { viewportID in
-              model.finishViewportMove(viewportID: viewportID)
-            },
-            onViewportResized: { viewportID, frame in
-              model.applyViewportFrame(viewportID: viewportID, frame: frame)
-            },
-            onViewportResizeEnded: { viewportID in
-              model.finishViewportResize(viewportID: viewportID)
             }
           )
           .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-
-          EmptyCanvasProbeView()
         }
         .clipped()
         .background(
@@ -2005,20 +2072,12 @@ struct CanvasGridView: View {
   }
 }
 
-struct EmptyCanvasProbeView: View {
-  var body: some View {
-    AccessibilityMarkerView(
-      identifier: "canvas-empty-probe",
-      label: "Canvas Empty Probe"
-    )
-      .frame(width: 96, height: 96)
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-  }
-}
-
 struct ViewportCardView: View {
   @EnvironmentObject private var model: LoopBrowserModel
   @ObservedObject var controller: ViewportController
+  @State private var headerDragOrigin: CGPoint?
+  @State private var resizeOriginFrame: ViewportFrame?
+  @State private var resizeHandleInProgress: ViewportResizeHandle?
   let index: Int
 
   var body: some View {
@@ -2027,7 +2086,10 @@ struct ViewportCardView: View {
       ZStack {
         EmbeddedViewportWebView(
           controller: controller,
-          accessibilityIdentifier: "viewport-native-web-\(index)"
+          accessibilityIdentifier: "viewport-native-web-\(index)",
+          onInteraction: {
+            model.selectViewport(controller.id)
+          }
         )
           .frame(width: CGFloat(controller.frame.width), height: CGFloat(controller.frame.height - CanvasUI.headerHeight))
         Color.clear
@@ -2056,13 +2118,6 @@ struct ViewportCardView: View {
     .overlay(alignment: .topTrailing) { alignedResizeHandle(.topRight) }
     .overlay(alignment: .bottomLeading) { alignedResizeHandle(.bottomLeft) }
     .overlay(alignment: .bottomTrailing) { alignedResizeHandle(.bottomRight) }
-    .overlay(alignment: .top) {
-      AccessibilityMarkerView(
-        identifier: "viewport-header-\(index)",
-        label: "\(controller.label) Header"
-      )
-      .frame(height: CanvasUI.headerHeight)
-    }
     .overlay {
       AccessibilityMarkerView(
         identifier: "viewport-card-\(index)",
@@ -2071,6 +2126,7 @@ struct ViewportCardView: View {
       )
     }
     .shadow(color: Color.black.opacity(0.14), radius: 20, x: 0, y: 14)
+    .accessibilityElement(children: .contain)
   }
 
   private var header: some View {
@@ -2104,6 +2160,9 @@ struct ViewportCardView: View {
             .padding(.leading, 6)
           }
           .allowsHitTesting(false)
+      }
+      .overlay {
+        headerDragSurface
       }
       Spacer()
       if model.canUseAgentLogin(on: controller) {
@@ -2169,14 +2228,39 @@ struct ViewportCardView: View {
       RoundedRectangle(cornerRadius: 7, style: .continuous)
         .fill(.white.opacity(0.001))
       resizeIndicator(for: handle, accentColor: accentColor)
-      AccessibilityMarkerView(
+      DragCaptureSurface(
         identifier: "viewport-resize-\(handle.accessibilityName)-\(index)",
-        label: "\(controller.label) \(handle.accessibilityName) Resize Handle"
+        label: "\(controller.label) \(handle.accessibilityName) Resize Handle",
+        onPress: {
+          reclaimWindowInputFocus()
+          model.selectViewport(controller.id, syncKeyboardFocus: false)
+        },
+        onDragChanged: { translation in
+          if resizeHandleInProgress != handle || resizeOriginFrame == nil {
+            resizeHandleInProgress = handle
+            resizeOriginFrame = controller.frame
+          }
+          guard resizeHandleInProgress == handle, let resizeOriginFrame else { return }
+          let scale = max(Double(model.canvasScale), 0.0001)
+          model.applyViewportFrame(
+            viewportID: controller.id,
+            frame: handle.resizedFrame(
+              from: resizeOriginFrame,
+              deltaX: Double(translation.width) / scale,
+              deltaY: Double(translation.height) / scale,
+              symmetric: false
+            )
+          )
+        },
+        onDragEnded: {
+          guard resizeHandleInProgress == handle else { return }
+          resizeOriginFrame = nil
+          resizeHandleInProgress = nil
+          model.finishViewportResize(viewportID: controller.id)
+        }
       )
     }
     .frame(width: handleSize(for: handle).width, height: handleSize(for: handle).height)
-    .contentShape(Rectangle())
-    .allowsHitTesting(false)
   }
 
   private func resizeIndicator(for handle: ViewportResizeHandle, accentColor: Color) -> some View {
@@ -2202,13 +2286,18 @@ struct ViewportCardView: View {
   }
 
   private func handleSize(for handle: ViewportResizeHandle) -> CGSize {
+    let scale = max(model.canvasScale, 0.0001)
+    let minimumScreenHitThickness: CGFloat = 18
+    let adjustedThickness = max(CanvasUI.edgeHandleThickness, minimumScreenHitThickness / scale)
+    let adjustedCorner = max(CanvasUI.cornerHandleSize, minimumScreenHitThickness / scale)
+
     switch handle {
     case .top, .bottom:
-      return CGSize(width: 72, height: 20)
+      return CGSize(width: 72, height: adjustedThickness)
     case .left, .right:
-      return CGSize(width: 20, height: 72)
+      return CGSize(width: adjustedThickness, height: 72)
     case .topLeft, .topRight, .bottomLeft, .bottomRight:
-      return CGSize(width: 24, height: 24)
+      return CGSize(width: adjustedCorner, height: adjustedCorner)
     }
   }
 
@@ -2231,6 +2320,53 @@ struct ViewportCardView: View {
     case .bottomRight:
       return CGSize(width: 2, height: 2)
     }
+  }
+
+  private var headerDragSurface: some View {
+    let scale = max(model.canvasScale, 0.0001)
+    let minimumScreenHitHeight: CGFloat = 32
+
+    return DragCaptureSurface(
+      identifier: "viewport-header-\(index)",
+      label: "\(controller.label) Header",
+      onPress: {
+        reclaimWindowInputFocus()
+        model.selectViewport(controller.id, syncKeyboardFocus: false)
+      },
+      onDragChanged: { translation in
+        if headerDragOrigin == nil {
+          headerDragOrigin = CGPoint(x: controller.frame.x, y: controller.frame.y)
+        }
+        guard let headerDragOrigin else { return }
+        let scale = max(model.canvasScale, 0.0001)
+        model.updateViewportOrigin(
+          viewportID: controller.id,
+          origin: CGPoint(
+            x: headerDragOrigin.x + translation.width / scale,
+            y: headerDragOrigin.y + translation.height / scale
+          )
+        )
+      },
+      onDragEnded: {
+        headerDragOrigin = nil
+        model.finishViewportMove(viewportID: controller.id)
+      }
+    )
+    .frame(
+      width: headerDragWidth,
+      height: max(CanvasUI.headerHeight, minimumScreenHitHeight / scale),
+      alignment: .leading
+    )
+  }
+
+  private var headerDragWidth: CGFloat {
+    let width = CGFloat(controller.frame.width)
+    let minimumDragWidth: CGFloat = 140
+    let reservedTrailingWidth = min(
+      CanvasUI.headerTrailingPassthroughWidth,
+      max(width - minimumDragWidth, 0)
+    )
+    return max(minimumDragWidth, width - reservedTrailingWidth)
   }
 
   private var statusColor: Color {
@@ -2602,6 +2738,7 @@ struct LoopBrowserNativeApp: App {
       RootWorkspaceView()
         .environmentObject(model)
         .task {
+          activateNativeTestWindowIfNeeded()
           model.startServices()
         }
         .frame(minWidth: 1280, minHeight: 820)

@@ -27,7 +27,7 @@ final class CanvasInputRouterTests: XCTestCase {
     }
 
     router.mouseDown(at: CGPoint(x: 80, y: 120))
-    router.mouseDragged(to: CGPoint(x: 132, y: 168), modifierFlags: [])
+    router.mouseDragged(to: CGPoint(x: 132, y: 168))
     router.mouseUp()
 
     XCTAssertTrue(didClearSelection)
@@ -88,69 +88,6 @@ final class CanvasInputRouterTests: XCTestCase {
     XCTAssertEqual(scrollCallCount, 0)
   }
 
-  func testHeaderDragUsesGrabOffsetWithoutJumping() throws {
-    let viewportID = UUID()
-    let frame = ViewportFrame(x: 100, y: 100, width: 800, height: 600)
-    let router = CanvasInputRouter()
-    router.transform = CanvasTransform(scale: 1, offset: .zero)
-    router.hitMap = CanvasHitMap(
-      transform: router.transform,
-      viewports: [CanvasHitViewport(id: viewportID, frame: frame)]
-    )
-
-    var selectedViewportID: UUID?
-    var draggedOrigin: CGPoint?
-    var finishedViewportID: UUID?
-
-    router.onViewportSelected = { selectedViewportID = $0 }
-    router.onViewportDragged = { _, origin in
-      draggedOrigin = origin
-    }
-    router.onViewportDragEnded = {
-      finishedViewportID = $0
-    }
-
-    router.mouseDown(at: CGPoint(x: 150, y: 120))
-    router.mouseDragged(to: CGPoint(x: 240, y: 190), modifierFlags: [])
-    router.mouseUp()
-
-    XCTAssertEqual(selectedViewportID, viewportID)
-    let resolvedDraggedOrigin = try XCTUnwrap(draggedOrigin)
-    XCTAssertEqual(resolvedDraggedOrigin.x, 190, accuracy: 0.0001)
-    XCTAssertEqual(resolvedDraggedOrigin.y, 170, accuracy: 0.0001)
-    XCTAssertEqual(finishedViewportID, viewportID)
-  }
-
-  func testResizeHandleDragUsesSharedResizeMath() throws {
-    let viewportID = UUID()
-    let frame = ViewportFrame(x: 100, y: 100, width: 800, height: 600)
-    let router = CanvasInputRouter()
-    router.transform = CanvasTransform(scale: 1, offset: .zero)
-    router.hitMap = CanvasHitMap(
-      transform: router.transform,
-      viewports: [CanvasHitViewport(id: viewportID, frame: frame)]
-    )
-
-    var resizedFrame: ViewportFrame?
-    var finishedViewportID: UUID?
-
-    router.onViewportResized = { _, frame in
-      resizedFrame = frame
-    }
-    router.onViewportResizeEnded = {
-      finishedViewportID = $0
-    }
-
-    router.mouseDown(at: CGPoint(x: 902, y: 380))
-    router.mouseDragged(to: CGPoint(x: 952, y: 430), modifierFlags: [])
-    router.mouseUp()
-
-    let resolvedResizedFrame = try XCTUnwrap(resizedFrame)
-    XCTAssertEqual(resolvedResizedFrame.width, 850, accuracy: 0.0001)
-    XCTAssertEqual(resolvedResizedFrame.height, 600, accuracy: 0.0001)
-    XCTAssertEqual(finishedViewportID, viewportID)
-  }
-
   func testCanvasInteractionViewPassesViewportContentThrough() {
     let viewportID = UUID()
     let view = CanvasInteractionNSView(frame: CGRect(x: 0, y: 0, width: 1400, height: 1000))
@@ -166,8 +103,8 @@ final class CanvasInputRouterTests: XCTestCase {
     )
 
     XCTAssertTrue(view.hitTest(CGPoint(x: 20, y: 20)) === view)
-    XCTAssertTrue(view.hitTest(CGPoint(x: 150, y: 120)) === view)
-    XCTAssertTrue(view.hitTest(CGPoint(x: 902, y: 380)) === view)
+    XCTAssertNil(view.hitTest(CGPoint(x: 150, y: 120)))
+    XCTAssertNil(view.hitTest(CGPoint(x: 902, y: 380)))
     XCTAssertNil(view.hitTest(CGPoint(x: 260, y: 240)))
     XCTAssertNil(view.hitTest(CGPoint(x: 840, y: 122)))
   }

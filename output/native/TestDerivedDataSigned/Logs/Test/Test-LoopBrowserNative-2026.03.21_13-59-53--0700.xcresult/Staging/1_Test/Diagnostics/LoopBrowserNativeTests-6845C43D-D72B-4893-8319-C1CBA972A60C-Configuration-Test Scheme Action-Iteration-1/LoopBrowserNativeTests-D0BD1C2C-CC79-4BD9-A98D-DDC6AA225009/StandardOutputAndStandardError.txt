@@ -1,4 +1,0 @@
-
-
-*** If you believe this error represents a bug, please attach the result bundle at /Users/rustymeadows/dev/browser-loop/output/native/TestDerivedDataSigned/Logs/Test/Test-LoopBrowserNative-2026.03.21_13-59-53--0700.xcresult
-

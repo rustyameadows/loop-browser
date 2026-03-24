@@ -1,6 +1,0 @@
-Target dependency graph (3 targets)
-Target 'LoopBrowserNativeUITests' in project 'LoopBrowserNative'
-➜ Explicit dependency on target 'LoopBrowserNative' in project 'LoopBrowserNative'
-Target 'LoopBrowserNativeTests' in project 'LoopBrowserNative'
-➜ Explicit dependency on target 'LoopBrowserNative' in project 'LoopBrowserNative'
-Target 'LoopBrowserNative' in project 'LoopBrowserNative' (no dependencies)

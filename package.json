@@ -18,7 +18,9 @@
     "smoke:mcp:packaged": "node scripts/mcp-smoke.mjs packaged",
     "smoke:mcp": "npm run build && npm run smoke:mcp:dev && npm run smoke:mcp:packaged",
     "build": "npm run build --workspace @agent-browser/desktop",
-    "package:mac": "npm run make:mac --workspace @agent-browser/desktop"
+    "package:desktop:mac": "npm run make:mac --workspace @agent-browser/desktop",
+    "package:native:mac": "zsh ./scripts/package-native-mac.sh",
+    "package:mac": "npm run package:native:mac"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

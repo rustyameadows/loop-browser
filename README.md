@@ -171,10 +171,25 @@ npm run smoke:mcp:packaged
 
 The smoke harness launches the app with isolated `AGENT_BROWSER_USER_DATA_DIR`, `AGENT_BROWSER_TOOL_SERVER_PORT`, and `AGENT_BROWSER_START_URL` overrides so it does not reuse your normal profile.
 
-6. Produce a local macOS zip artifact.
+6. Produce the native macOS app in `output/`.
 
 ```sh
 npm run package:mac
+```
+
+This writes:
+
+- `output/Loop Browser.app`
+- `output/Loop Browser-macOS.zip`
+
+The `output/` directory is local build and test output and is not intended to be checked into source control.
+
+The package step builds the native app artifact only. Run the native stress tests separately when you want to validate interaction behavior.
+
+If you need the Electron package instead, run:
+
+```sh
+npm run package:desktop:mac
 ```
 
 7. If the packaged smoke test fails on full-window screenshots on macOS, grant Screen Recording permission to `Loop Browser.app` and rerun the smoke test.
